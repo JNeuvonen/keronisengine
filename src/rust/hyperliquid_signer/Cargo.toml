@@ -1,0 +1,18 @@
+[package]
+name = "hyperliquid_signer"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+name = "hyperliquid_signer"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1"
+tiny-keccak = { version = "2", features = ["keccak"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
+hex = "0.4"

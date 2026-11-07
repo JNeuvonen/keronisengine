@@ -1,0 +1,78 @@
+{
+  "markets": [
+    {
+      "exchange": "binance",
+      "market_type": "swap",
+      "exchange_bars": [
+        {"interval": "1m", "symbols": {"symbols": "*", "contains_any": ["USDT"], "exclude": ["ABCCCUSDT"]}},
+        {"interval": "15m", "symbols": {"symbols": "*", "contains_any": ["USDT"], "exclude": ["ABCCCUSDT"]}},
+        {"interval": "1d", "symbols": {"symbols": "*", "contains_any": ["USDT"], "exclude": ["ABCCCUSDT"]}}
+      ],
+      "trades": {
+        "symbols": {"symbols": "*", "contains_any": ["USDT", "USDC"], "exclude": ["ABCCCUSDT"]}
+      },
+      "record": ["trades"],
+      "trade_bars": [
+        {"interval": "1s", "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT"]}
+      ],
+      "book_ticker": {
+        "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                    "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC"],
+        "solo_connections": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        "group_size": 15
+      },
+      "l2": {
+        "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                    "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC"],
+        "solo_connections": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        "group_size": 15
+      },
+      "mini_ticker": true
+    },
+    {
+      "exchange": "binance",
+      "market_type": "spot",
+      "exchange_bars": [
+        {"interval": "15m", "symbols": {"symbols": "*", "contains_any": ["USDT"],
+         "exclude_suffixes": ["TRY", "BRL", "ARS", "UAH", "PLN", "RON", "MXN", "COP", "JPY", "ZAR", "CZK", "IDRT", "EUR", "DAI", "USDC", "FDUSD"]}}
+      ],
+      "trades": {
+        "symbols": {
+          "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                      "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC", "HYPEUSDC"],
+          "only_listed": true
+        }
+      },
+      "book_ticker": {
+        "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                    "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC", "HYPEUSDC"]
+      },
+      "l2": {
+        "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                    "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC", "HYPEUSDC"]
+      },
+      "mini_ticker": true
+    },
+    {
+      "exchange": "gateio",
+      "market_type": "spot",
+      "exchange_bars": [
+        {"interval": "15m", "stream": false, "symbols": {"symbols": "*", "contains_any": ["USDT"], "exclude": ["ABCCCUSDT"]}}
+      ],
+      "l2": {
+        "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
+                    "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC", "HYPEUSDC"]
+      }
+    },
+    {
+      "exchange": "aster",
+      "market_type": "swap",
+      "book_ticker": {
+        "symbols": ["XRPUSDT"],
+        "solo_connections": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
+        "group_size": 15
+      }
+    }
+  ],
+  "polymarket": {"stream": true}
+}

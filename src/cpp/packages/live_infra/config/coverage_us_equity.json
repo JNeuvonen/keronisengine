@@ -1,0 +1,14 @@
+{
+  "markets": [
+    {
+      "exchange": "polygon",
+      "market_type": "stock",
+      "symbols": "*",
+      "exchange_bars": [
+        {"interval": "1m"},
+        {"interval": "1d", "stream": false}
+      ]
+    }
+  ],
+  "polymarket": {"stream": true}
+}

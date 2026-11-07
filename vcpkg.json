@@ -1,0 +1,30 @@
+{
+  "name": "keronis-engine",
+  "version-string": "0.1.0",
+  "builtin-baseline": "ffc071e0c08432c60c9b64f00334c0227667931b",
+  "dependencies": [
+    "asio",
+    "catch2",
+    "cnats",
+    "concurrentqueue",
+    "cpp-httplib",
+    "curl",
+    "date",
+    "gmp",
+    "libpq",
+    "mpfr",
+    "nlohmann-json",
+    "openssl",
+    "secp256k1",
+    "simdjson",
+    "sqlite3",
+    "tbb",
+    "unordered-dense",
+    "zeromq",
+    "zlib",
+    {
+      "name": "arrow",
+      "features": ["parquet", "dataset", "json", "filesystem", "compute", "acero"]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+Keronis Engine
+Copyright 2026 Keronis Technology
+
+This product includes software developed by third parties:
+
+- WebSocket++ (src/cpp/headeronlylibs/websocketpp), BSD 3-Clause License,
+  Copyright (c) 2014, Peter Thorson. See src/cpp/headeronlylibs/websocketpp/COPYING.
