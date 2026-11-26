@@ -3,8 +3,8 @@ const steps = [
   {
     idx: 0,
     col: 0,
-    headline: 'Socket thread parses raw wire JSON via simdjson & enqueues lock-free',
-    sync: 'NormalizedParsedTrade::from_simdjson() → live_event_queue_',
+    headline: 'MarketDataStreams parses raw wire JSON via simdjson & fans out',
+    sync: 'DataRecorder · BarAggregator (OHLCV) · sm_queue_ · live_event_queue_',
     dataTitle: 'Raw Binance Futures Wire Frame (btcusdt@trade)',
     data: `{
   "e": "trade",
@@ -16,30 +16,17 @@ const steps = [
   "q": "1.85",
   "m": false
 }`,
-    sourceRef: 'normalized_trade.cpp:59 · state_updater.cpp:936',
-    code: `auto t = NormalizedParsedTrade::from_simdjson(
-    el, "binance", "swap");
-live_event_queue_.enqueue(std::move(event));`,
+    sourceRef: 'normalized_trade.cpp:59 · market_data_streams.cpp:1423–1444',
+    code: `DataRecorder::getInstance().record_with_symbol(..., msg);
+BarAggregator::getInstance().add_trade(trade, true);
+StateMachineDispatcher::get_instance().enqueue(MarketEvent(ev));
+live_event_callback_(std::move(ev));`,
   },
   {
     idx: 1,
     col: 1,
-    headline: 'Consumer updates order book & fans out asynchronously',
-    sync: 'RingBufferBook (~1.5 ns/op) + StateMachineDispatcher::enqueue()',
-    dataTitle: 'Normalized State & Concurrent Fan-out',
-    data: `book.apply_bid(tick_idx, qty)      // ~1.5 ns/op (285K)
-engine.update_price("BTCUSDT", px) // readable by T5 now
-sm_dispatcher.enqueue(event)       // non-blocking MPSC`,
-    sourceRef: 'state_updater.cpp:4070, 4221',
-    code: `live_event_queue_.wait_dequeue_timed(event, ...);
-StateMachineDispatcher::get_instance()
-    .enqueue(MarketEvent(event));`,
-  },
-  {
-    idx: 2,
-    col: 2,
     headline: 'Dedicated SM thread updates rolling C++ feature state',
-    sync: 'Versioned lock-free machine snapshot · shared offline & live C++',
+    sync: 'Shared C++ code between offline feature generation and live trading',
     dataTitle: 'WindowedTakerFlowSM::emit_state()',
     data: `bucket[ts_sec % 3600].buy_volume += 100420.50 * 1.85
 emit_state() -> float[5] {
@@ -50,15 +37,16 @@ emit_state() -> float[5] {
   vol_ratio_5s_30s: 0.412f
 }`,
     sourceRef: 'state_machine_dispatcher.cpp:64 · windowed_taker_flow_sm.cpp:65',
-    code: `for (auto& sm : snapshot) {
+    code: `// Versioned local snapshot — no mutex on hot path
+for (auto& sm : snapshot) {
     sm->react(event);
 }`,
   },
   {
-    idx: 3,
-    col: 3,
-    headline: 'Async worker pool scores ONNX & updates atomic_signal_main',
-    sync: 'In-flight guarded pool (not 1:1 per tick) → atomic store',
+    idx: 2,
+    col: 2,
+    headline: 'Async worker pool scores ONNX in-process & stores atomic signal',
+    sync: 'In-flight guarded pool (hardware_concurrency) → atomic_signal_main',
     dataTitle: 'OnnxModel::predict() → AtomicSignal',
     data: `model:              "taker_flow_v1.onnx" (C++ session)
 input_tensor:       float[1, 5]
@@ -69,18 +57,33 @@ atomic_signal_main: store(0.712f, 1732632012418)`,
 ticker->atomic_signal_main.store(score, now_ms);`,
   },
   {
-    idx: 4,
-    col: 4,
-    headline: 'Strategy pool reads latest book + atomic signal & posts order',
-    sync: 'ticker->trading_mutex → construct_order() → TradeTicker seam',
-    dataTitle: 'Core::Order Posted (<1 ms end-to-end)',
-    data: `risk_gate:  trading_mutex · quotes_pulled=false · PASS
-order:      { symbol: "BTCUSDT", side: BUY, qty: "0.01" }
-dispatch:   Direct Sign | cpp_live_proxy | PaperExchange`,
+    idx: 3,
+    col: 3,
+    headline: 'Strategy pool reads latest signal, bars & books and checks risk',
+    sync: 'ticker->trading_mutex → construct_order() (caps · rate · quote holds)',
+    dataTitle: 'Risk Gate & Order Construction',
+    data: `signal:      atomic_signal_main.load() == 0.712f
+market_data: latest OhlcvDataset bars + live BBA / books
+risk_gate:   trading_mutex · quotes_pulled=false · PASS
+result:      OrderConstructionResult::VALID`,
     sourceRef: 'engine.cpp:871 · binance_onnx_perp.cpp:57',
     code: `std::lock_guard lock(ticker->trading_mutex);
 auto [score, ts] = ticker->atomic_signal_main.load();
 StrategyHelpers::submit_market_order(..., decision);`,
+  },
+  {
+    idx: 4,
+    col: 4,
+    headline: 'Validated order dispatches across the TradeTicker execution seam',
+    sync: 'Direct signers · bundled cpp_live_proxy · PaperExchange · BacktestState',
+    dataTitle: 'Core::Order Dispatched (<1 ms hot path)',
+    data: `order:  { symbol: "BTCUSDT", side: BUY, type: MARKET, qty: "0.01" }
+direct: Polymarket (EIP-712) · Hyperliquid (Rust) · Aster
+proxy:  Binance · Bybit · OKX · Gate.io · IBKR Equities
+sim:    PaperExchange (live depth) · BacktestState (Parquet)`,
+    sourceRef: 'Core::TradeTicker → LiveTradeTicker / BacktestTradeTicker',
+    code: `// Identical strategy binary across backtest, paper, and live
+ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
   },
 ];
 ---
@@ -100,12 +103,12 @@ StrategyHelpers::submit_market_order(..., decision);`,
     </div>
   </div>
 
-  <!-- Spacious 5-column vertical thread-swimlane illustration with live computational values -->
+  <!-- Open 5-column vertical thread-swimlane illustration (2 lines max per box) -->
   <div class="ep-stage">
     <svg
-      viewBox="0 0 1180 390"
+      viewBox="0 0 1180 356"
       role="img"
-      aria-label="Vertical thread swimlane visualization showing concurrent asynchronous event propagation from raw Binance trade ticks through lock-free queues, streaming C++ features, in-process ONNX inference, atomic signal register, and strategy execution"
+      aria-label="Vertical thread swimlane visualization showing raw Binance trade ticks fanning out to BarAggregator, DataRecorder, live_event_consumer, and directly into StateMachineDispatcher, then asynchronously through ONNX Runtime, atomic_signal_main, strategy_pool, and venue dispatch"
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
@@ -121,138 +124,126 @@ StrategyHelpers::submit_market_order(..., decision);`,
       </defs>
 
       <!-- 5 Vertical Thread Swimlane Backgrounds -->
-      <rect class="col-bg" data-col="0" x="0" y="0" width="206" height="340" fill="transparent" />
-      <rect class="col-bg" data-col="1" x="242" y="0" width="206" height="340" fill="transparent" />
-      <rect class="col-bg" data-col="2" x="484" y="0" width="206" height="340" fill="transparent" />
-      <rect class="col-bg" data-col="3" x="726" y="0" width="206" height="340" fill="transparent" />
-      <rect class="col-bg" data-col="4" x="968" y="0" width="212" height="340" fill="transparent" />
+      <rect class="col-bg" data-col="0" x="0" y="0" width="206" height="308" fill="transparent" />
+      <rect class="col-bg" data-col="1" x="242" y="0" width="206" height="308" fill="transparent" />
+      <rect class="col-bg" data-col="2" x="484" y="0" width="206" height="308" fill="transparent" />
+      <rect class="col-bg" data-col="3" x="726" y="0" width="206" height="308" fill="transparent" />
+      <rect class="col-bg" data-col="4" x="968" y="0" width="212" height="308" fill="transparent" />
 
       <!-- Vertical thread boundary hairlines -->
-      <line x1="224" y1="8" x2="224" y2="338" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="466" y1="8" x2="466" y2="338" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="708" y1="8" x2="708" y2="338" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="950" y1="8" x2="950" y2="338" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="224" y1="8" x2="224" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="466" y1="8" x2="466" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="708" y1="8" x2="708" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="950" y1="8" x2="950" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
 
       <!-- Thread Column Headers -->
-      <text x="14" y="26" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T1 · WS I/O</text>
-      <text x="14" y="43" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">MarketDataStreams</text>
+      <text x="14" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T1 · MarketDataStreams</text>
+      <text x="14" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">WS I/O + simdjson</text>
 
-      <text x="256" y="26" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Event Consumer</text>
-      <text x="256" y="43" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">live_event_consumer</text>
+      <text x="256" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Feature SM</text>
+      <text x="256" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">StateMachineDispatcher</text>
 
-      <text x="498" y="26" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · Feature SM</text>
-      <text x="498" y="43" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">StateMachineDispatcher</text>
+      <text x="498" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · ONNX Pool</text>
+      <text x="498" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">predictions_pool (async)</text>
 
-      <text x="740" y="26" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T4 · ONNX Pool</text>
-      <text x="740" y="43" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">predictions_pool (async)</text>
+      <text x="740" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T4 · Strategy Pool</text>
+      <text x="740" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">strategy_pool (async)</text>
 
-      <text x="982" y="26" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · Strategy Pool</text>
-      <text x="982" y="43" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">strategy_pool (async)</text>
+      <text x="982" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · Execution Seam</text>
+      <text x="982" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">Core::TradeTicker</text>
 
-      <!-- CONCURRENT UPPER BYPASS: Book / Spot state readable asynchronously by T5 -->
-      <path d="M 345 128 L 345 84 L 1072 84 L 1072 126" fill="none" stroke="#222c3c" stroke-width="1.4" />
-      <path class="async-pulse" d="M 345 128 L 345 84 L 1072 84 L 1072 126" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
-      <text x="708" y="74" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
-        live order book &amp; spot price readable concurrently (independent of ONNX cadence)
+      <!-- CONCURRENT UPPER FAN-OUT TRACK: T1 -> BarAggregator / DataRecorder / live_event_consumer -> T4 -->
+      <path d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#222c3c" stroke-width="1.4" />
+      <path class="async-pulse" d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#60a5fa" stroke-width="1.6" marker-end="url(#arr-queue)" />
+
+      <!-- Compact concurrent state node (BarAggregator + DataRecorder + live_event_consumer) -->
+      <rect x="256" y="72" width="420" height="44" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.16)" stroke-width="1.1" />
+      <text x="272" y="91" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">
+        BarAggregator (OHLCV)  ·  DataRecorder  ·  live_event_consumer
+      </text>
+      <text id="live-bar" x="272" y="107" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">
+        1m bar close 100420.50 · live BBA &amp; books · PaperExchange prints
       </text>
 
-      <!-- HANDOFF 1: T1 -> live_event_queue_ (Lock-free ring queue glyph) -> T2 -->
-      <line x1="192" y1="184" x2="254" y2="184" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
-      <line class="flow-beam" data-beam="0" x1="192" y1="184" x2="250" y2="184" stroke="#60a5fa" stroke-width="2" />
-      <!-- Discrete Queue Buffer Slots -->
-      <g class="q-glyph" data-q="0" transform="translate(206, 174)">
+      <!-- Feed from concurrent bars/books into T4 Strategy Pool -->
+      <path d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#222c3c" stroke-width="1.4" />
+      <path class="async-pulse" d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
+
+      <!-- MAIN LEFT-TO-RIGHT HANDOFFS -->
+      <!-- Handoff 0->1: sm_queue_ (Direct lock-free queue from MarketDataStreams -> StateMachineDispatcher) -->
+      <line x1="192" y1="192" x2="254" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
+      <line class="flow-beam" data-beam="0" x1="192" y1="192" x2="250" y2="192" stroke="#60a5fa" stroke-width="2" />
+      <g class="q-glyph" transform="translate(206, 182)">
         <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
-        <rect class="q-slot" x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
-        <rect class="q-slot" x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.55" />
-        <rect class="q-slot" x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
+        <rect x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
+        <rect x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.5" />
+        <rect x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
       </g>
-      <text x="224" y="282" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">live_event_queue_</text>
-      <text x="224" y="297" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">lock-free MPSC</text>
+      <text x="224" y="256" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">sm_queue_</text>
+      <text x="224" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">lock-free MPSC</text>
 
-      <!-- HANDOFF 2: T2 -> sm_queue_ (Lock-free fan-out queue glyph) -> T3 -->
-      <line x1="434" y1="184" x2="496" y2="184" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
-      <line class="flow-beam" data-beam="1" x1="434" y1="184" x2="492" y2="184" stroke="#60a5fa" stroke-width="2" />
-      <g class="q-glyph" data-q="1" transform="translate(448, 174)">
-        <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
-        <rect class="q-slot" x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
-        <rect class="q-slot" x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.4" />
-        <rect class="q-slot" x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
-      </g>
-      <text x="466" y="282" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">sm_queue_</text>
-      <text x="466" y="297" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">async fan-out</text>
+      <!-- Handoff 1->2: emit_state() -->
+      <line x1="434" y1="192" x2="496" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <line class="flow-beam" data-beam="1" x1="434" y1="192" x2="492" y2="192" stroke="#cbd5e1" stroke-width="2" />
+      <text x="466" y="256" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">emit_state()</text>
+      <text x="466" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">float[5]</text>
 
-      <!-- HANDOFF 3: T3 -> emit_state() snapshot read -> T4 -->
-      <line x1="676" y1="184" x2="738" y2="184" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
-      <line class="flow-beam" data-beam="2" x1="676" y1="184" x2="734" y2="184" stroke="#cbd5e1" stroke-width="2" />
-      <text x="708" y="282" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">emit_state()</text>
-      <text x="708" y="297" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">float[5] snapshot</text>
-
-      <!-- HANDOFF 4: T4 -> atomic_signal_main (Atomic register glyph) -> T5 -->
-      <line x1="918" y1="184" x2="980" y2="184" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-atom)" />
-      <line class="flow-beam" data-beam="3" x1="918" y1="184" x2="976" y2="184" stroke="#d4a359" stroke-width="2.2" />
-      <!-- Atomic Memory Register Cell -->
-      <g class="atom-glyph" id="atom-reg" transform="translate(925, 171)">
+      <!-- Handoff 2->3: atomic_signal_main -->
+      <line x1="676" y1="192" x2="738" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-atom)" />
+      <line class="flow-beam" data-beam="2" x1="676" y1="192" x2="734" y2="192" stroke="#d4a359" stroke-width="2.2" />
+      <g class="atom-glyph" transform="translate(683, 179)">
         <rect x="0" y="0" width="50" height="26" rx="2" fill="#15120b" stroke="#d4a359" stroke-width="1.3" />
         <text id="live-atom" x="25" y="17" text-anchor="middle" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600">0.712</text>
       </g>
-      <text x="950" y="282" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="10.5">atomic_signal</text>
-      <text x="950" y="297" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">store / load</text>
+      <text x="708" y="256" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="10.5">atomic_signal</text>
+      <text x="708" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">store / load</text>
 
-      <!-- STAGE NODES WITH LIVE COMPUTATIONAL READOUTS -->
-      <!-- Node 0: T1 WS I/O -->
-      <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Parse raw wire tick">
-        <rect x="14" y="130" width="178" height="114" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="26" y="152" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">01 · RAW WIRE (simdjson)</text>
-        <text x="26" y="174" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">btcusdt@trade</text>
-        <text id="live-t1-px" x="26" y="198" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">"p":"100420.50"</text>
-        <text id="live-t1-qty" x="26" y="216" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">"q":"1.85" "m":false</text>
-        <text id="live-t1-id" x="26" y="232" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="9.5">t=5481920411</text>
+      <!-- Handoff 3->4: TradeTicker seam -->
+      <line x1="918" y1="192" x2="980" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <line class="flow-beam" data-beam="3" x1="918" y1="192" x2="976" y2="192" stroke="#cbd5e1" stroke-width="2" />
+      <text x="950" y="256" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">Core::Order</text>
+      <text x="950" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">risk-checked</text>
+
+      <!-- 5 COMPACT STAGE NODES — STRICTLY 2 LINES PER BOX -->
+      <!-- Node 0: Raw Trade -->
+      <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Raw Trade ingest">
+        <rect x="14" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="28" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Raw Trade</text>
+        <text id="live-t1" x="28" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">100420.50 · 1.85 BUY</text>
       </g>
 
-      <!-- Node 1: T2 Book & Fan-out -->
-      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: Update order book and fan out">
-        <rect x="256" y="130" width="178" height="114" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="268" y="152" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">02 · MARKET STATE</text>
-        <text x="268" y="174" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">RingBufferBook</text>
-        <text id="live-t2-bba" x="268" y="198" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">last  100420.50</text>
-        <text id="live-t2-side" x="268" y="216" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">taker BUY $185.8k</text>
-        <text x="268" y="232" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">apply_bid ~1.5 ns/op</text>
+      <!-- Node 1: Feature SM -->
+      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: Streaming Feature SM">
+        <rect x="256" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="270" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Feature SM</text>
+        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">buy_ratio 0.780</text>
       </g>
 
-      <!-- Node 2: T3 Feature SM -->
-      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: Streaming feature state machine">
-        <rect x="498" y="130" width="178" height="114" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="510" y="152" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">03 · FEATURES (C++)</text>
-        <text x="510" y="174" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">WindowedTakerFlow</text>
-        <text id="live-t3-ratio" x="510" y="198" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">buy_ratio_5s  0.780</text>
-        <text id="live-t3-cnt" x="510" y="216" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">trades_5s     14</text>
-        <text x="510" y="232" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="9.5">shared offline/live</text>
+      <!-- Node 2: ONNX Model -->
+      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: ONNX Model Inference">
+        <rect x="498" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="512" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">ONNX Model</text>
+        <text id="live-t3" x="512" y="209" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score 0.712</text>
       </g>
 
-      <!-- Node 3: T4 ONNX Pool -->
-      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: In-process ONNX inference">
-        <rect x="740" y="130" width="178" height="114" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="752" y="152" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">04 · INFERENCE</text>
-        <text x="752" y="174" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">ONNX Runtime</text>
-        <text id="live-t4-score" x="752" y="198" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score  0.712f</text>
-        <text id="live-t4-gate" x="752" y="216" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">enter  &gt; 0.650f</text>
-        <text x="752" y="232" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="9.5">in-flight guarded</text>
+      <!-- Node 3: Strategy & Risk -->
+      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy and Risk Gate">
+        <rect x="740" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="754" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Strategy &amp; Risk</text>
+        <text id="live-t4" x="754" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 MARKET</text>
       </g>
 
-      <!-- Node 4: T5 Strategy & Risk -->
-      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Strategy decision, risk gate, and order dispatch">
-        <rect x="982" y="130" width="184" height="114" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="994" y="152" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">05 · RISK &amp; ORDER</text>
-        <text x="994" y="174" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">construct_order()</text>
-        <text id="live-t5-act" x="994" y="198" fill="#f1f5f9" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 MARKET</text>
-        <text id="live-t5-risk" x="994" y="216" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">caps · rate · holds</text>
-        <text x="994" y="232" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="9.5">Direct · Proxy · Paper</text>
+      <!-- Node 4: Venue Dispatch -->
+      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Venue Dispatch">
+        <rect x="982" y="156" width="184" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="996" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Venue Dispatch</text>
+        <text id="live-t5" x="996" y="209" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">Direct · Proxy · Paper</text>
       </g>
 
-      <!-- Bottom bracket: honest end-to-end latency + async note -->
-      <path d="M 14 336 L 14 348 L 1166 348 L 1166 336" fill="none" stroke="#222c3c" stroke-width="1.2" />
-      <text x="590" y="370" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
-        &lt;1 ms tick → features → inference → order · T4 (ONNX) and T5 (Strategy) poll latest state asynchronously
+      <!-- Bottom bracket -->
+      <path d="M 14 306 L 14 318 L 1166 318 L 1166 306" fill="none" stroke="#222c3c" stroke-width="1.2" />
+      <text x="590" y="340" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
+        &lt;1 ms tick → features → inference → order · T3 (ONNX) and T4 (Strategy) poll latest state asynchronously
       </text>
     </svg>
   </div>
@@ -419,12 +410,12 @@ StrategyHelpers::submit_market_order(..., decision);`,
   }
 
   .async-pulse.is-active {
-    opacity: 0.75;
+    opacity: 0.78;
   }
 
   @media (prefers-reduced-motion: no-preference) {
     .ep:not(.is-paused) .async-pulse {
-      animation: epFlow 2.4s linear infinite;
+      animation: epFlow 2.3s linear infinite;
     }
     .ep:not(.is-paused) .flow-beam.is-active {
       animation: epFlow 0.95s linear infinite;
@@ -440,7 +431,6 @@ StrategyHelpers::submit_market_order(..., decision);`,
     }
   }
 
-  /* Quiet inspector below the SVG */
   .ep-inspector {
     margin-top: 0.6rem;
     padding-top: 1.35rem;
@@ -535,107 +525,82 @@ StrategyHelpers::submit_market_order(..., decision);`,
     const nodes = Array.from(root.querySelectorAll('.ep-node'));
     const cols = Array.from(root.querySelectorAll('.col-bg'));
     const beams = Array.from(root.querySelectorAll('.flow-beam'));
-    const asyncPulse = root.querySelector('.async-pulse');
+    const asyncPulses = Array.from(root.querySelectorAll('.async-pulse'));
     const panels = Array.from(root.querySelectorAll('.ep-row'));
     const counter = document.getElementById('ep-counter');
     const prevBtn = document.getElementById('ep-prev');
     const nextBtn = document.getElementById('ep-next');
     const playBtn = document.getElementById('ep-play');
 
-    // Live SVG readout elements (shows concurrent asynchronous state updates)
-    const elT1Px = document.getElementById('live-t1-px');
-    const elT1Qty = document.getElementById('live-t1-qty');
-    const elT1Id = document.getElementById('live-t1-id');
-    const elT2Bba = document.getElementById('live-t2-bba');
-    const elT2Side = document.getElementById('live-t2-side');
-    const elT3Ratio = document.getElementById('live-t3-ratio');
-    const elT3Cnt = document.getElementById('live-t3-cnt');
-    const elT4Score = document.getElementById('live-t4-score');
+    const elT1 = document.getElementById('live-t1');
+    const elT2 = document.getElementById('live-t2');
+    const elT3 = document.getElementById('live-t3');
     const elAtom = document.getElementById('live-atom');
-    const elT5Act = document.getElementById('live-t5-act');
+    const elT4 = document.getElementById('live-t4');
+    const elT5 = document.getElementById('live-t5');
+    const elBar = document.getElementById('live-bar');
 
-    // Representative asynchronous simulation frames:
-    // Multiple ticks arrive in T1->T2->T3 while T4 (ONNX) and T5 (Strategy)
-    // evaluate on their own cadence and only fire when score > 0.650f.
     const frames = [
       {
-        t1Px: '"p":"100418.00"',
-        t1Qty: '"q":"0.42" "m":true',
-        t1Id: 't=5481920408',
-        t2Bba: 'last  100418.00',
-        t2Side: 'taker SELL $42.2k',
-        t3Ratio: 'buy_ratio_5s  0.540',
-        t3Cnt: 'trades_5s     11',
-        t4Score: 'score  0.584f',
+        t1: '100418.00 · 0.42 SELL',
+        t2: 'buy_ratio 0.540',
+        t3: 'score 0.584',
         atom: '0.584',
-        t5Act: 'HOLD (< 0.650)',
+        t4: 'HOLD (< 0.650)',
+        t5: 'idle',
+        bar: '1m bar close 100418.00 · live BBA & books · PaperExchange prints',
       },
       {
-        t1Px: '"p":"100419.50"',
-        t1Qty: '"q":"0.90" "m":false',
-        t1Id: 't=5481920409',
-        t2Bba: 'last  100419.50',
-        t2Side: 'taker BUY  $90.4k',
-        t3Ratio: 'buy_ratio_5s  0.642',
-        t3Cnt: 'trades_5s     12',
-        t4Score: 'score  0.584f', // async: ONNX hasn't re-scored yet
+        t1: '100419.50 · 0.90 BUY',
+        t2: 'buy_ratio 0.642',
+        t3: 'score 0.584', // async: ONNX polls on its own cadence
         atom: '0.584',
-        t5Act: 'HOLD (< 0.650)',
+        t4: 'HOLD (< 0.650)',
+        t5: 'idle',
+        bar: '1m bar close 100419.50 · live BBA & books · PaperExchange prints',
       },
       {
-        t1Px: '"p":"100420.00"',
-        t1Qty: '"q":"0.65" "m":false',
-        t1Id: 't=5481920410',
-        t2Bba: 'last  100420.00',
-        t2Side: 'taker BUY  $65.3k',
-        t3Ratio: 'buy_ratio_5s  0.710',
-        t3Cnt: 'trades_5s     13',
-        t4Score: 'score  0.641f',
+        t1: '100420.00 · 0.65 BUY',
+        t2: 'buy_ratio 0.710',
+        t3: 'score 0.641',
         atom: '0.641',
-        t5Act: 'HOLD (< 0.650)',
+        t4: 'HOLD (< 0.650)',
+        t5: 'idle',
+        bar: '1m bar close 100420.00 · live BBA & books · PaperExchange prints',
       },
       {
-        t1Px: '"p":"100420.50"',
-        t1Qty: '"q":"1.85" "m":false',
-        t1Id: 't=5481920411',
-        t2Bba: 'last  100420.50',
-        t2Side: 'taker BUY $185.8k',
-        t3Ratio: 'buy_ratio_5s  0.780',
-        t3Cnt: 'trades_5s     14',
-        t4Score: 'score  0.712f',
+        t1: '100420.50 · 1.85 BUY',
+        t2: 'buy_ratio 0.780',
+        t3: 'score 0.712',
         atom: '0.712',
-        t5Act: 'BUY 0.01 MARKET',
+        t4: 'BUY 0.01 MARKET',
+        t5: 'Direct · Proxy · Paper',
+        bar: '1m bar close 100420.50 · live BBA & books · PaperExchange prints',
       },
       {
-        t1Px: '"p":"100421.00"',
-        t1Qty: '"q":"0.30" "m":false',
-        t1Id: 't=5481920412',
-        t2Bba: 'last  100421.00',
-        t2Side: 'taker BUY  $30.1k',
-        t3Ratio: 'buy_ratio_5s  0.794',
-        t3Cnt: 'trades_5s     15',
-        t4Score: 'score  0.712f',
+        t1: '100421.00 · 0.30 BUY',
+        t2: 'buy_ratio 0.794',
+        t3: 'score 0.712',
         atom: '0.712',
-        t5Act: 'ORDER SUBMITTED',
+        t4: 'ORDER VALID',
+        t5: 'SUBMITTED',
+        bar: '1m bar close 100421.00 · live BBA & books · PaperExchange prints',
       },
     ];
 
     let current = 0;
-    let frameIdx = 3; // start on the representative triggered frame
+    let frameIdx = 3;
     let timer = null;
 
     function applyFrame(fi) {
       const f = frames[fi % frames.length];
-      if (elT1Px) elT1Px.textContent = f.t1Px;
-      if (elT1Qty) elT1Qty.textContent = f.t1Qty;
-      if (elT1Id) elT1Id.textContent = f.t1Id;
-      if (elT2Bba) elT2Bba.textContent = f.t2Bba;
-      if (elT2Side) elT2Side.textContent = f.t2Side;
-      if (elT3Ratio) elT3Ratio.textContent = f.t3Ratio;
-      if (elT3Cnt) elT3Cnt.textContent = f.t3Cnt;
-      if (elT4Score) elT4Score.textContent = f.t4Score;
+      if (elT1) elT1.textContent = f.t1;
+      if (elT2) elT2.textContent = f.t2;
+      if (elT3) elT3.textContent = f.t3;
       if (elAtom) elAtom.textContent = f.atom;
-      if (elT5Act) elT5Act.textContent = f.t5Act;
+      if (elT4) elT4.textContent = f.t4;
+      if (elT5) elT5.textContent = f.t5;
+      if (elBar) elBar.textContent = f.bar;
     }
 
     function setStep(idx) {
@@ -648,7 +613,7 @@ StrategyHelpers::submit_market_order(..., decision);`,
       beams.forEach((b, i) => {
         b.classList.toggle('is-active', i === current - 1 || (current === 0 && i === 0));
       });
-      asyncPulse?.classList.toggle('is-active', current >= 1);
+      asyncPulses.forEach((p) => p.classList.toggle('is-active', current === 0 || current === 3));
       panels.forEach((p, i) => p.classList.toggle('is-active', i === current));
     }
 
@@ -700,7 +665,7 @@ StrategyHelpers::submit_market_order(..., decision);`,
     nodes.forEach((node, idx) => {
       node.addEventListener('click', () => {
         stopAuto();
-        applyFrame(3); // pin representative triggered frame when inspecting
+        applyFrame(3);
         setStep(idx);
       });
       node.addEventListener('keydown', (e) => {
