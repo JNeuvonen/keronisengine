@@ -50,7 +50,7 @@ flowchart LR
 - [Live & Paper Trading](live-and-paper.md): PostgreSQL + NATS setup, `schema.sql`, `PaperExchange`, and `QuoteHolds`.
 - [Comparison](comparison.md): tradeoffs against NautilusTrader and HftBacktest.
 
-Plain Markdown documentation for scripts and agents is available at [`/llms.txt`](llms.txt) and [`/llms-full.txt`](llms-full.txt).
+Plain Markdown documentation for scripts and agents is available at [`/llms.txt`](https://engine.keronis.ai/llms.txt) and [`/llms-full.txt`](https://engine.keronis.ai/llms-full.txt).
 
 !!! warning "Disclaimer"
     KeronisEngine is licensed under Apache-2.0 and provided as-is without warranty. Validate strategies in `backtest_runner` and `PaperExchange` before running with live exchange credentials.
