@@ -10,6 +10,7 @@ PAGES = [
     "quickstart.md",
     "architecture.md",
     "comparison.md",
+    "faq.md",
     "strategies.md",
     "state-machines.md",
     "live-and-paper.md",

@@ -15,6 +15,7 @@ PAGES = {
     "state-machines.md": ("state-machines.md", "State Machines & ONNX", "Build streaming C++ StrategyStateMachine feature engines and run sub-millisecond ONNX Runtime inference."),
     "live-and-paper.md": ("live-and-paper.md", "Live & Paper Trading", "Run live_infra with PostgreSQL, NATS, PaperExchange, QuoteHolds, and native venue clients."),
     "comparison.md": ("comparison.md", "Comparison", "How KeronisEngine compares to NautilusTrader and HftBacktest for predictive-model trading."),
+    "faq.md": ("faq.md", "FAQ", "Frequently asked questions about KeronisEngine architecture, ONNX inference, venues, performance, and live operations."),
     "control-server.md": ("control-server.md", "Control Server API", "Embedded localhost HTTP introspection and gated control endpoints."),
     "configuration.md": ("configuration.md", "Configuration", "Environment variables for live_infra and export_strategy_config, plus backtest config.json reference."),
 }

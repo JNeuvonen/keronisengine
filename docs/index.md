@@ -12,6 +12,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 |---|---|
 | [Quickstart](quickstart.md) | Docker image, native Linux CMake/vcpkg build, unit tests, and the synthetic `sma_crossover` backtest. |
 | [Comparison](comparison.md) | Architectural tradeoffs relative to NautilusTrader and HftBacktest. |
+| [FAQ](faq.md) | Direct Q&A on design choices, ONNX inference, hardware, venues, and live operations. |
 
 ### Core Concepts
 

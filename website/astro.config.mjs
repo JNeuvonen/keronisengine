@@ -72,6 +72,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'docs' },
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Comparison', slug: 'comparison' },
+            { label: 'FAQ', slug: 'faq' },
           ],
         },
         {

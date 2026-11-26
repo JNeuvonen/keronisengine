@@ -15,6 +15,7 @@
 - [Strategies](https://engine.keronis.ai/strategies/)
 - [State Machines & ONNX](https://engine.keronis.ai/state-machines/)
 - [Comparison](https://engine.keronis.ai/comparison/)
+- [FAQ](https://engine.keronis.ai/faq/)
 - [Live & Paper Trading](https://engine.keronis.ai/live-and-paper/)
 - [Control Server API](https://engine.keronis.ai/control-server/)
 - [Configuration](https://engine.keronis.ai/configuration/)
