@@ -1,73 +1,41 @@
-# Writing a Strategy
+# Strategies
 
-Strategies self-register by name with `KERONIS_REGISTER_STRATEGY`. You do **not** need to edit any engine source file to add a strategy.
+Strategies are C++ functions registered by name with `KERONIS_REGISTER_STRATEGY`. You do not need to modify engine source files to add a strategy.
 
-## External Strategy Directories
+## Compiling external strategies
 
-Keep your strategies in your own private repository and point CMake at them:
+Keep your strategy sources in a separate directory or repository and pass `-DKERONIS_STRATEGY_DIRS` to CMake:
 
 ```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
   -DONNXRUNTIME_ROOT="$ORT" \
   -DKERONIS_STRATEGY_DIRS="/path/to/my_strategies;/path/to/my_state_machines"
 cmake --build build -j"$(nproc)"
 ```
 
-Every `.cpp` under `KERONIS_STRATEGY_DIRS` is compiled into `keronis_engine` and linked with `WHOLE_ARCHIVE` into `backtest_runner`, `live_infra`, and `historical_feature_gen`.
+CMake globs all `.cpp` files under `KERONIS_STRATEGY_DIRS` into `keronis_engine`, which is linked with `WHOLE_ARCHIVE` into `backtest_runner`, `live_infra`, and `historical_feature_gen` so static initializers are preserved.
 
-## Anatomy of a Strategy
+## Strategy structure
 
-See [`src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp) for a complete runnable strategy. The key hooks are:
+A binder function attaches callbacks and bar requirements to a `Core::Strategy` instance:
 
-```cpp
-#include "market_making/strategy_registry.h"
-#include "market_making/engine.h"
-#include "market_making/strategy.h"
-#include "market_making/ticker.h"
+- `strategy.strategy_callback`: called on market events or periodic state polls; returns a vector of `Core::StrategyDecision` (orders to submit or cancel).
+- `strategy.compute_predictions_callback`: called before decision evaluation to run state-machine reads and ONNX model scoring.
+- `strategy.required_bar_types`: list of `MarketData::BarClosePolicy` (for example `MarketData::BarClosePolicy::time_bars(60'000)`).
 
-namespace {
+For simple market entries and exits, `market_making/strategy_helpers.h` wraps `CreateOrderParams`, `construct_order`, and `mark_order_to_be_created`. See `src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp` for a complete runnable example.
 
-std::vector<Core::StrategyDecision> on_market_event(
-    Core::Engine& engine,
-    Core::Strategy& strategy,
-    std::optional<Core::MarketEvent> event) {
-    std::vector<Core::StrategyDecision> decisions;
-    const long long now_ms = engine.get_time();
+## Locking and order lifecycle
 
-    for (auto& [symbol, ticker_ptr] : strategy.trade_tickers) {
-        std::lock_guard<std::mutex> lock(ticker_ptr->trading_mutex);
-        if (!ticker_ptr->get_orders(false).empty()) continue;
+1. Always acquire `std::lock_guard<std::mutex> lock(ticker_ptr->trading_mutex)` before inspecting `get_orders(false)` / `get_trades(false)` or constructing orders.
+2. Always construct orders through `ticker_ptr->construct_order(engine, strategy, params)` so exposure caps, order-rate limits, reduce-only rules, and quote-pull gates are applied uniformly.
+3. When `strategy.quotes_pulled` is true (set via `QuotesPullReason::PULL_SIGNAL`, `GUARD_STALE`, or `SHUTDOWN`), resting `LIMIT` and `LIMIT_MAKER` entry orders are refused and active resting entries are canceled. Close orders and `IOC`/`FOK`/`MARKET` orders remain permitted.
 
-        const auto& em = ticker_ptr->exchange_and_markets.front();
-        const auto price = engine.get_price(symbol, em.exchange_name, em.market_type);
-        if (!price.has_value()) continue;
+## Bundled reference strategies
 
-        // Build Core::CreateOrderParams, call ticker_ptr->construct_order(...),
-        // then ticker_ptr->mark_order_to_be_created(engine, order, decision, strategy).
-    }
-    return decisions;
-}
-
-void bind_my_strategy(Core::Strategy& strategy) {
-    strategy.strategy_callback = on_market_event;
-    strategy.compute_predictions_callback = [](Core::Engine&, Core::Strategy&) {};
-}
-
-}  // namespace
-
-KERONIS_REGISTER_STRATEGY("my_strategy", bind_my_strategy);
-```
-
-## Key Conventions
-
-- **Locking:** Always lock `ticker_ptr->trading_mutex` before inspecting `get_orders(false)` / `get_trades(false)` or calling `construct_order`.
-- **Order construction:** Always go through `ticker_ptr->construct_order(engine, strategy, params)` so pre-trade risk limits, order-rate caps, reduce-only checks, and quote-pull gates are enforced consistently.
-- **Quote holds (`quotes_pulled`):** When `strategy.quotes_pulled` is set (via `PULL_SIGNAL`, `GUARD_STALE`, or `SHUTDOWN`), resting `LIMIT` / `LIMIT_MAKER` entry orders are refused and existing resting entries are swept/canceled, while close orders and `IOC`/`FOK`/`MARKET` orders remain allowed.
-- **Bundled reference strategies:**
-  - `sma_crossover` — bar-driven moving average crossover (used by the quickstart backtest)
-  - `test_quoter` — resting limit bid quoting against BBA
-  - `test_taker` — market taker flow against BBA
-  - `test_market_maker` — two-sided post-only quoting around BBA
-  - `discretionary` — command-driven discretionary execution with stops and take-profits
+- `sma_crossover`: 5/20 moving-average crossover on 1-minute bars (used by `examples/quickstart_backtest/`).
+- `test_quoter`: posts a single resting limit bid one tick below best bid.
+- `test_taker`: sends market buy orders against best ask.
+- `test_market_maker`: posts two-sided post-only quotes around BBA.
+- `discretionary`: command-driven execution with stop-loss and take-profit management.

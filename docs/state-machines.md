@@ -1,14 +1,10 @@
-# State Machines & ONNX Inference
+# State Machines & ONNX
 
-To eliminate train/serve skew, KeronisEngine computes streaming features inside C++ `MarketData::StrategyStateMachine` classes that run identically in:
+Streaming features are implemented as C++ subclasses of `MarketData::StrategyStateMachine`. The same class runs in `historical_feature_gen` (offline Parquet training sets), `backtest_runner`, and `live_infra`, avoiding feature drift between training and serving.
 
-1. `historical_feature_gen` (offline training panel generation)
-2. `backtest_runner` (historical strategy replay)
-3. `live_infra` (live and paper trading)
+## Implementing and registering a state machine
 
-## Registering a State Machine
-
-Subclass `MarketData::StrategyStateMachine`, implement its required virtual methods (`initialize_symbol_states`, `react_impl`, `emit_state_impl`), and register the type with `KERONIS_REGISTER_STATE_MACHINE(name, Type)`:
+Subclass `MarketData::StrategyStateMachine`, override `initialize_symbol_states()`, `react_impl()`, and `emit_state_impl()`, and register the type with `KERONIS_REGISTER_STATE_MACHINE(name, Type)`:
 
 ```cpp
 #include "market_data/state_machine_registry.h"
@@ -48,19 +44,14 @@ class MyFeatureSM : public MarketData::StrategyStateMachine {
 KERONIS_REGISTER_STATE_MACHINE("my_features", MyFeatureSM);
 ```
 
-See the bundled state machines under `src/cpp/packages/historical_feature_gen/src/transformations/` (`spread_sm.cpp`, `taker_flow_sm.cpp`, `windowed_taker_flow_sm.cpp`, `bba_imbalance_ratio_sm.cpp`, `global_bba_sm.cpp`, `six_venue_order_sm.cpp`, `polymarket_trade_flow_sm.cpp`) for complete examples.
+Seven reference state machines are included under `src/cpp/packages/historical_feature_gen/src/transformations/`: `spread_sm`, `taker_flow_sm`, `windowed_taker_flow_sm`, `bba_imbalance_ratio_sm`, `global_bba_sm`, `six_venue_order_sm`, and `polymarket_trade_flow_sm`.
 
-## Lifecycle Hooks
+## Live lifecycle hooks
 
-`MarketData::StrategyStateMachine` provides hooks for live resilience:
+- `on_trade_stream_disconnected(symbol, exchange_name, market_type)`: called from the stream health-check thread when a trade feed drops.
+- `run_background_work()`: called roughly once per second from the syncer thread for slow work (such as REST catch-up) that must not block the event dispatcher.
+- `serialize_state_impl()` / `deserialize_state_impl()`: optional binary state persistence across restarts.
 
-- `on_trade_stream_disconnected(symbol, exchange_name, market_type)` — invoked by the stream health monitor when a trade feed drops.
-- `run_background_work()` — called approximately once per second from the syncer thread for slow work (such as REST catch-up) that must not block the event dispatcher.
+## ONNX Runtime inference
 
-## ONNX Model Inference
-
-`common/include/onnx_model.h` wraps ONNX Runtime C++ sessions for low-latency in-process inference:
-
-- Export your trained model (LightGBM, XGBoost, PyTorch, etc.) to `.onnx`.
-- Configure `models` or `model_schedule_path` on your `StrategyConfig`.
-- Score the feature vector produced by your `StrategyStateMachine` inside `compute_predictions_callback` or `on_market_event`.
+`common/include/onnx_model.h` wraps ONNX Runtime C++ sessions for in-process scoring. Export a trained model to `.onnx`, reference it in `StrategyConfig` (`models` or `model_schedule_path`), and score the feature vector returned by your state machine inside `compute_predictions_callback`.
