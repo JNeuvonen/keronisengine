@@ -1,9 +1,65 @@
 ---
-const title = 'KeronisEngine — C++20 Execution Built for Predictive Models';
+const title = 'KeronisEngine — Sub-ms Trading & Predictive-Model Execution Engine';
 const description =
-  'Open-source C++20 execution and real-time ML inference engine. Sub-millisecond tick-to-ONNX-to-order execution for crypto, Polymarket, and event markets on commodity hardware.';
+  'Open-source C++20 trading engine built for predictive models and high-frequency execution. Trade crypto, Polymarket, stocks (IBKR), and event or sports markets from one system.';
+
+const codePolymarketDigital = `// src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp
+// Polymarket digital options market making / high-frequency pricer:
+// Prices P(S_T > K) from live Binance spot (swap fair_prob_yes with OnnxModel::predict)
+// and quotes/executes YES or NO on the Polymarket CLOB when edge exceeds threshold.
+double fair_prob_yes(double spot, double strike, double tau_sec) {
+    const double denom = kAnnualVol * std::sqrt(tau_sec / kSecondsPerYear);
+    if (denom <= 1e-9) return spot >= strike ? 1.0 : 0.0;
+    return std::clamp(normal_cdf(std::log(spot / strike) / denom), 0.01, 0.99);
+}
+
+std::vector<Core::StrategyDecision> on_market_event(
+    Core::Engine& engine, Core::Strategy& strategy,
+    std::optional<Core::MarketEvent>) {
+    std::vector<Core::StrategyDecision> decisions;
+    const long long now_ms = engine.get_time();
+
+    auto tickers_lock = strategy.lock_on_pred_market_strat();
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
+        if (ticker->clob_ids_by_index.size() < 2 || !ticker->get_orders(false).empty()) continue;
+
+        const long long remaining_ms = ticker->event_end_time_ms.load() - now_ms;
+        const auto spot = engine.get_price(ticker->underlying_symbol, "binance", "swap");
+        if (remaining_ms < kMinRemainingMs || !spot || *spot <= 0.0) continue;
+
+        const double p_yes = fair_prob_yes(*spot, ticker->strike_price, remaining_ms / 1000.0);
+        const double fair[2] = {p_yes, 1.0 - p_yes};
+        const double tick = ticker->order_price_min_tick_size.load();
+
+        Core::StrategyDecision decision;
+        decision.symbol = symbol;
+        for (int outcome = 0; outcome < 2; ++outcome) {
+            if (ticker->get_outcome_exchange_inventory(outcome) >= kMaxOutcomePos) continue;
+            const auto bba = ticker->read_outcome_bba(outcome);
+            if (!bba || bba->best_ask <= 0.0 || (fair[outcome] - bba->best_ask) < kMinEdge) continue;
+
+            auto [res, order] = ticker->construct_order(engine, strategy, make_limit_buy(
+                symbol, round_to_tick(bba->best_ask, tick), kOrderShares, now_ms, *ticker, strategy));
+            if (res == Core::OrderConstructionResult::VALID && order.has_value()) {
+                auto o = order.value();
+                o.is_prediction_market_order = true;
+                o.clob_id = ticker->clob_ids_by_index[outcome];
+                o.outcome_name = outcome == 0 ? "Yes" : "No";
+                ticker->mark_order_to_be_created(engine, o, decision, strategy);
+                break;
+            }
+        }
+        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
+    }
+    return decisions;
+}
+
+KERONIS_REGISTER_STRATEGY("polymarket_digital", bind_polymarket_digital);`;
 
 const codeBinanceOnnx = `// src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp
+// Predictive-model perpetuals strategy:
+// Streaming taker-flow features -> in-process ONNX inference -> risk-checked execution.
 void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {
     auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine(
         "windowed_taker_flow");
@@ -58,58 +114,9 @@ std::vector<Core::StrategyDecision> on_market_event(
 
 KERONIS_REGISTER_STRATEGY("binance_onnx_perp", bind_binance_onnx_perp);`;
 
-const codePolymarketDigital = `// src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp
-double fair_prob_yes(double spot, double strike, double tau_sec) {
-    const double denom = kAnnualVol * std::sqrt(tau_sec / kSecondsPerYear);
-    if (denom <= 1e-9) return spot >= strike ? 1.0 : 0.0;
-    return std::clamp(normal_cdf(std::log(spot / strike) / denom), 0.01, 0.99);
-}
-
-std::vector<Core::StrategyDecision> on_market_event(
-    Core::Engine& engine, Core::Strategy& strategy,
-    std::optional<Core::MarketEvent>) {
-    std::vector<Core::StrategyDecision> decisions;
-    const long long now_ms = engine.get_time();
-
-    auto tickers_lock = strategy.lock_on_pred_market_strat();
-    for (auto& [symbol, ticker] : strategy.trade_tickers) {
-        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
-        if (ticker->clob_ids_by_index.size() < 2 || !ticker->get_orders(false).empty()) continue;
-
-        const long long remaining_ms = ticker->event_end_time_ms.load() - now_ms;
-        const auto spot = engine.get_price(ticker->underlying_symbol, "binance", "swap");
-        if (remaining_ms < kMinRemainingMs || !spot || *spot <= 0.0) continue;
-
-        const double p_yes = fair_prob_yes(*spot, ticker->strike_price, remaining_ms / 1000.0);
-        const double fair[2] = {p_yes, 1.0 - p_yes};
-        const double tick = ticker->order_price_min_tick_size.load();
-
-        Core::StrategyDecision decision;
-        decision.symbol = symbol;
-        for (int outcome = 0; outcome < 2; ++outcome) {
-            if (ticker->get_outcome_exchange_inventory(outcome) >= kMaxOutcomePos) continue;
-            const auto bba = ticker->read_outcome_bba(outcome);
-            if (!bba || bba->best_ask <= 0.0 || (fair[outcome] - bba->best_ask) < kMinEdge) continue;
-
-            auto [res, order] = ticker->construct_order(engine, strategy, make_limit_buy(
-                symbol, round_to_tick(bba->best_ask, tick), kOrderShares, now_ms, *ticker, strategy));
-            if (res == Core::OrderConstructionResult::VALID && order.has_value()) {
-                auto o = order.value();
-                o.is_prediction_market_order = true;
-                o.clob_id = ticker->clob_ids_by_index[outcome];
-                o.outcome_name = outcome == 0 ? "Yes" : "No";
-                ticker->mark_order_to_be_created(engine, o, decision, strategy);
-                break;
-            }
-        }
-        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
-    }
-    return decisions;
-}
-
-KERONIS_REGISTER_STRATEGY("polymarket_digital", bind_polymarket_digital);`;
-
 const codeSpreadSm = `// src/cpp/packages/historical_feature_gen/src/transformations/spread_sm.cpp
+// Streaming feature example: runs identically in offline Parquet training panels,
+// historical backtests, paper trading, and live execution.
 void SpreadSM::react_impl(const MarketData::MarketEvent& event) {
     if (event.type != MarketData::MarketEvent::BBA || !event.bba.has_value()) return;
     auto it = symbol_states_.find(event.symbol_key());
@@ -133,12 +140,6 @@ std::optional<std::vector<float>> SpreadSM::emit_state_impl() const {
         result.push_back(static_cast<float>(state.last_ask - state.last_bid));
     }
     return result;
-}
-
-std::vector<std::string> SpreadSM::feature_names() const {
-    std::vector<std::string> names;
-    for (const auto& [key, _] : symbol_states_) names.push_back(key + ":spread");
-    return names;
 }
 
 KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
@@ -304,7 +305,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         letter-spacing: -0.035em;
         font-weight: 800;
         margin: 0 0 1.2rem;
-        max-width: 17ch;
+        max-width: 18ch;
       }
 
       .grad {
@@ -317,7 +318,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       .lead {
         font-size: clamp(1.03rem, 1.4vw, 1.18rem);
         color: var(--text-muted);
-        max-width: 64ch;
+        max-width: 66ch;
         margin: 0 0 1.9rem;
       }
 
@@ -411,7 +412,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
       .metric-val {
         font-family: var(--font-mono);
-        font-size: 1.48rem;
+        font-size: 1.42rem;
         font-weight: 700;
         color: var(--text);
         letter-spacing: -0.02em;
@@ -468,6 +469,43 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         width: 100%;
         min-width: 740px;
         height: auto;
+      }
+
+      /* Market & strategy coverage grid */
+      .bento {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        padding: 1.35rem;
+        border-radius: 0.75rem;
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        transition: border-color 0.15s ease;
+      }
+
+      .card:hover {
+        border-color: var(--border-bright);
+      }
+
+      .card-tag {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--cyan);
+        margin-bottom: 0.4rem;
+      }
+
+      .card h3 {
+        margin: 0 0 0.45rem;
+        font-size: 1.02rem;
+      }
+
+      .card p {
+        margin: 0;
+        font-size: 0.87rem;
+        color: var(--text-muted);
       }
 
       /* Flagship examples */
@@ -687,43 +725,6 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         margin-top: 0.5rem;
       }
 
-      /* Bento cards */
-      .bento {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 1rem;
-      }
-
-      .card {
-        padding: 1.35rem;
-        border-radius: 0.75rem;
-        border: 1px solid var(--border);
-        background: var(--bg-card);
-        transition: border-color 0.15s ease;
-      }
-
-      .card:hover {
-        border-color: var(--border-bright);
-      }
-
-      .card-tag {
-        font-family: var(--font-mono);
-        font-size: 0.72rem;
-        color: var(--cyan);
-        margin-bottom: 0.4rem;
-      }
-
-      .card h3 {
-        margin: 0 0 0.45rem;
-        font-size: 1.02rem;
-      }
-
-      .card p {
-        margin: 0;
-        font-size: 0.88rem;
-        color: var(--text-muted);
-      }
-
       /* Scope box */
       .scope-box {
         padding: 1.35rem 1.5rem;
@@ -795,7 +796,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <nav class="nav-links" aria-label="Primary">
           <a href="/quickstart/" class="nav-docs">Docs</a>
           <a href="/strategies/">Strategies</a>
-          <a href="/state-machines/">State Machines</a>
+          <a href="/state-machines/">Features &amp; ONNX</a>
           <a href="/architecture/">Architecture</a>
           <a href="/comparison/">Comparison</a>
           <a href="https://github.com/JNeuvonen/keronisengine" class="nav-gh">GitHub</a>
@@ -807,18 +808,18 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       <section class="hero">
         <div class="eyebrow">
           <span class="eyebrow-dot"></span>
-          Apache-2.0 · C++20 · In-Process ONNX Runtime · Linux
+          Apache-2.0 · C++20 + Bundled Venue Proxy · Sub-ms ONNX Inference
         </div>
-        <h1>C++20 execution built for <span class="grad">predictive models.</span></h1>
+        <h1>Focus on alpha. Run <span class="grad">predictive models</span> on any market.</h1>
         <p class="lead">
-          Focus on finding alpha—not rebuilding feature pipelines and execution plumbing.
-          KeronisEngine runs streaming C++ feature state machines and ONNX Runtime inference
-          directly on tick arrival across crypto, Polymarket, and extensible event or sports markets.
+          KeronisEngine is a full-stack trading engine built for predictive models and high-frequency execution.
+          Generate training features, backtest, paper trade, and execute live across crypto, Polymarket,
+          US equities, and event or sports markets—using the same compiled code on a single ~$100 Linux server.
         </p>
 
         <div class="actions">
-          <a href="/strategies/#binance-onnx-perp" class="btn btn-primary">Binance ONNX Example →</a>
-          <a href="/strategies/#polymarket-digital-options" class="btn btn-secondary">Polymarket Digital Options</a>
+          <a href="/strategies/#polymarket-digital-options" class="btn btn-primary">Polymarket Market Making →</a>
+          <a href="/strategies/#binance-onnx-perp" class="btn btn-secondary">Binance ONNX Example</a>
           <a href="/quickstart/" class="btn btn-secondary">Quickstart</a>
         </div>
 
@@ -830,36 +831,118 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
         <div class="metrics">
           <div class="metric">
-            <div class="metric-val"><span>&lt;1 ms</span> in-process path</div>
-            <div class="metric-lbl">Streaming feature update + ONNX scoring + order decision on tick arrival</div>
+            <div class="metric-val"><span>&lt;1 ms</span> tick-to-order</div>
+            <div class="metric-lbl">Real-time feature update, in-process ONNX inference, and risk-checked order decision</div>
           </div>
           <div class="metric">
             <div class="metric-val"><span>10,000+</span> msg/s</div>
-            <div class="metric-lbl">Full Binance live feeds + continuous model scoring on a ~$100 Linux box</div>
+            <div class="metric-lbl">Full-exchange crypto feeds + continuous ML scoring on one ~$100 Linux box</div>
           </div>
           <div class="metric">
-            <div class="metric-val"><span>~1.5 ns</span> / op (book)</div>
-            <div class="metric-lbl"><code>RingBufferBook::apply_bid</code> microbenchmark (Core Ultra 9 285K, strict IEEE-754)</div>
+            <div class="metric-val"><span>Multi-asset</span> ready</div>
+            <div class="metric-lbl">Crypto, Polymarket, US stocks (IBKR), and modular adapters for sports betting</div>
           </div>
           <div class="metric">
-            <div class="metric-val"><span>1</span> feature engine</div>
-            <div class="metric-lbl">Same C++ <code>StrategyStateMachine</code> in training panels, backtest, paper &amp; live</div>
+            <div class="metric-val"><span>Full stack</span> included</div>
+            <div class="metric-lbl">Engine, feature pipeline, backtester, paper exchange, and bundled CCXT/IBKR proxy</div>
           </div>
         </div>
       </section>
 
       <section>
-        <div class="sec-kicker">Architecture</div>
-        <h2>Offline training loop meets sub-ms online execution</h2>
+        <div class="sec-kicker">What It Generalizes To</div>
+        <h2>One engine for every market and trading style</h2>
         <p class="sec-desc">
-          Both paths link the exact same compiled <code>StrategyStateMachine</code> code—eliminating
-          feature-code drift between offline Parquet training panels and live ONNX inference.
+          The core engine treats venues, order books, multi-outcome contracts, and execution routes as clean interfaces—so
+          the same research-to-live workflow powers directional ML, high-frequency market making, cross-venue arbitrage, and options pricing.
+        </p>
+        <div class="bento">
+          <div class="card">
+            <div class="card-tag">Crypto Spot &amp; Perps</div>
+            <h3>Direct &amp; CCXT Execution</h3>
+            <p>Native Hyperliquid, Aster, and Lighter L2 feeds—plus Binance, Bybit, OKX, Gate.io, Bitget, and Coinbase via the bundled Python venue proxy.</p>
+          </div>
+          <div class="card">
+            <div class="card-tag">Prediction Markets</div>
+            <h3>Native Polymarket CLOB</h3>
+            <p>Multi-outcome order books, live CLOB WebSockets, native EIP-712 bulk signing, and queue-notional backtesting for short-dated digital options and event markets.</p>
+          </div>
+          <div class="card">
+            <div class="card-tag">Equities &amp; Stocks</div>
+            <h3>Interactive Brokers (IBKR)</h3>
+            <p>Built-in IBKR session management, US equity catalog, and order lifecycle routing through the bundled proxy—run equity models on the same stack.</p>
+          </div>
+          <div class="card">
+            <div class="card-tag">Sports Betting &amp; Custom Venues</div>
+            <h3>Extensible Outcome Markets</h3>
+            <p>Binary and multi-outcome tickers built for Polymarket map cleanly to sportsbooks, betting exchanges, or any custom feed—plug in a stream and trade.</p>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-kicker">Flagship Examples</div>
+        <h2>Two real, compiled strategies to learn from</h2>
+        <p class="sec-desc">
+          Both examples compile into the engine, are verified by unit tests, and show the exact APIs used in production—ready to adapt to your own models and markets.
+        </p>
+        <div class="examples-grid">
+          <div class="example-card emerald-accent">
+            <div class="example-head">
+              <span class="pill emerald">polymarket_digital</span>
+              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Prediction Markets · Market Making</span>
+            </div>
+            <h3>Polymarket Digital Options Market Making</h3>
+            <p class="summary">
+              Cross-venue binary options pricer &amp; market-making pattern: price <code>P(S_T &gt; K)</code>
+              from a live Binance reference price and buy YES or NO on the Polymarket CLOB when edge exceeds threshold.
+            </p>
+            <ul class="spec-list">
+              <li><strong>Inputs</strong><span>Live Binance perp spot + Polymarket multi-outcome order book</span></li>
+              <li><strong>Pricing</strong><span>Analytical digital fair value (swap <code>fair_prob_yes()</code> with an ONNX probability model)</span></li>
+              <li><strong>Execution</strong><span>Native Polymarket CLOB limit orders with tick rounding and per-outcome inventory caps</span></li>
+            </ul>
+            <div class="example-links">
+              <a href="/strategies/#polymarket-digital-options">Read walkthrough →</a>
+              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp">View C++ source</a>
+            </div>
+          </div>
+
+          <div class="example-card cyan-accent">
+            <div class="example-head">
+              <span class="pill">binance_onnx_perp</span>
+              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Crypto Perps · Predictive Model</span>
+            </div>
+            <h3>Binance Perpetuals ONNX Strategy</h3>
+            <p class="summary">
+              End-to-end predictive-model pattern: compute streaming order-flow features, score an ONNX model
+              in-process on tick arrival, and execute risk-checked entries and exits.
+            </p>
+            <ul class="spec-list">
+              <li><strong>Features</strong><span>Rolling taker buy/sell notional and trade-count windows</span></li>
+              <li><strong>Inference</strong><span>In-process ONNX Runtime scoring (LightGBM, XGBoost, or PyTorch)</span></li>
+              <li><strong>Execution</strong><span>Runs unchanged across backtests, paper trading, and live Binance via the bundled proxy</span></li>
+            </ul>
+            <div class="example-links">
+              <a href="/strategies/#binance-onnx-perp">Read walkthrough →</a>
+              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp">View C++ source</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-kicker">How It Works</div>
+        <h2>Offline training loop meets sub-ms live execution</h2>
+        <p class="sec-desc">
+          Train models in Python (LightGBM, XGBoost, PyTorch), export to <code>.onnx</code>, and serve them
+          with the exact same compiled C++ feature code that generated your training dataset.
         </p>
         <div class="diagram-shell">
           <svg
             viewBox="0 0 1060 320"
             role="img"
-            aria-label="KeronisEngine architecture showing the offline training loop sharing StrategyStateMachine with the online execution path"
+            aria-label="KeronisEngine workflow separating offline model training from sub-millisecond online execution while sharing the same C++ feature engine"
             xmlns="http://www.w3.org/2000/svg"
           >
             <defs>
@@ -874,30 +957,28 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
               </marker>
             </defs>
 
-            <!-- Track labels -->
-            <text x="16" y="28" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">OFFLINE TRAINING LOOP</text>
-            <text x="16" y="188" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">ONLINE EXECUTION PATH (SINGLE C++20 PROCESS)</text>
+            <text x="16" y="28" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">OFFLINE RESEARCH &amp; TRAINING</text>
+            <text x="16" y="188" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">ONLINE EXECUTION (SUB-MS IN-PROCESS)</text>
 
-            <!-- Shared C++ State Machine highlight column -->
             <rect x="404" y="38" width="206" height="264" rx="12" fill="rgba(34, 211, 238, 0.05)" stroke="rgba(34, 211, 238, 0.35)" stroke-dasharray="5 5" />
-            <text x="507" y="168" text-anchor="middle" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600">SHARED C++ BINARY CODE</text>
+            <text x="507" y="168" text-anchor="middle" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600">SAME C++ FEATURE CODE</text>
 
             <!-- TOP ROW: Offline -->
             <rect x="16" y="48" width="166" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="30" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Partitioned Parquet</text>
+            <text x="30" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Historical Parquet</text>
             <text x="30" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">OHLCV · Trades · L2</text>
 
             <line x1="182" y1="84" x2="210" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
 
             <rect x="216" y="48" width="164" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="230" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">historical_feature_gen</text>
-            <text x="230" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">MergeIterator replay</text>
+            <text x="230" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Event Replay</text>
+            <text x="230" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Timestamp-ordered</text>
 
             <line x1="380" y1="84" x2="412" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
 
             <rect x="418" y="48" width="178" height="72" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
-            <text x="432" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">StrategyStateMachine</text>
-            <text x="432" y="96" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">react() → emit_state()</text>
+            <text x="432" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Streaming Features</text>
+            <text x="432" y="96" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Emit training panels</text>
 
             <line x1="596" y1="84" x2="628" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
 
@@ -911,121 +992,68 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
             <text x="868" y="75" fill="#fde68a" font-family="Inter, sans-serif" font-size="13" font-weight="700">Export model.onnx</text>
             <text x="868" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Versioned artifact</text>
 
-            <!-- Dashed drop from model.onnx into ONNX Runtime -->
             <path d="M 949 120 L 949 154 L 726 154 L 726 202" fill="none" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#arrow-amber)" />
 
             <!-- BOTTOM ROW: Online -->
             <rect x="16" y="208" width="166" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="30" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Market Tick</text>
-            <text x="30" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Live WS or Parquet</text>
-            <text x="30" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Crypto · Polymarket</text>
+            <text x="30" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Live Market Feeds</text>
+            <text x="30" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">WebSockets / Replay</text>
+            <text x="30" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Crypto · Polymarket · Eq</text>
 
             <line x1="182" y1="247" x2="210" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
 
             <rect x="216" y="208" width="164" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="230" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">RingBufferBook</text>
-            <text x="230" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">16B POD · bitmap walk</text>
-            <text x="230" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">~1.5 ns/op microbench</text>
+            <text x="230" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Order Books</text>
+            <text x="230" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">L2 &amp; multi-outcome</text>
+            <text x="230" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">In-memory state</text>
 
             <line x1="380" y1="247" x2="412" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
 
             <rect x="418" y="208" width="178" height="78" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
-            <text x="432" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">StrategyStateMachine</text>
-            <text x="432" y="256" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Same compiled class</text>
-            <text x="432" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">StateMachineDispatcher</text>
+            <text x="432" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Streaming Features</text>
+            <text x="432" y="256" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Real-time updates</text>
+            <text x="432" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">No feature-code drift</text>
 
             <line x1="596" y1="247" x2="628" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
 
             <rect x="634" y="208" width="184" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="648" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">ONNX Runtime</text>
-            <text x="648" y="256" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="10.5">OnnxModel::predict()</text>
-            <text x="648" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">AtomicSignal → Strategy</text>
+            <text x="648" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">ONNX Inference</text>
+            <text x="648" y="256" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="10.5">In-process scoring</text>
+            <text x="648" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Zero Python/IPC hops</text>
 
             <line x1="818" y1="247" x2="848" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
 
             <rect x="854" y="208" width="190" height="78" rx="10" fill="#0d1d18" stroke="rgba(52, 211, 153, 0.5)" />
             <text x="868" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Risk &amp; Execution</text>
             <text x="868" y="256" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="10.5">Backtest · Paper · Live</text>
-            <text x="868" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">QuoteHolds · Native Sign</text>
+            <text x="868" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Direct + CCXT/IBKR proxy</text>
           </svg>
         </div>
       </section>
 
       <section>
-        <div class="sec-kicker">Flagship Examples</div>
-        <h2>Two real, compiled strategies to learn from</h2>
-        <p class="sec-desc">
-          Both examples compile into the engine, are verified by Catch2 registration tests, and show
-          the exact APIs used in production—without legacy clutter.
-        </p>
-        <div class="examples-grid">
-          <div class="example-card cyan-accent">
-            <div class="example-head">
-              <span class="pill">binance_onnx_perp</span>
-              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Crypto Perps · ONNX</span>
-            </div>
-            <h3>Binance Perpetuals ONNX Strategy</h3>
-            <p class="summary">
-              End-to-end predictive-model pattern: compute streaming features, score an ONNX model
-              off the tick thread via <code>AtomicSignal</code>, and execute risk-checked orders.
-            </p>
-            <ul class="spec-list">
-              <li><strong>Features</strong><span><code>WindowedTakerFlowSM</code> rolling buy/sell notional and trade counts</span></li>
-              <li><strong>Inference</strong><span><code>OnnxModel::predict()</code> inside <code>compute_predictions_callback</code></span></li>
-              <li><strong>Execution</strong><span><code>Core::StrategyHelpers</code> market entry/exit (standalone in backtest &amp; <code>PaperExchange</code>; live Binance via configured proxy)</span></li>
-            </ul>
-            <div class="example-links">
-              <a href="/strategies/#binance-onnx-perp">Read walkthrough →</a>
-              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp">View C++ source</a>
-            </div>
-          </div>
-
-          <div class="example-card emerald-accent">
-            <div class="example-head">
-              <span class="pill emerald">polymarket_digital</span>
-              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Prediction Markets · Native CLOB</span>
-            </div>
-            <h3>Polymarket Digital Options Strategy</h3>
-            <p class="summary">
-              Cross-venue binary options pattern: price <code>P(S_T &gt; K)</code> from a live Binance
-              reference price and buy YES or NO on the Polymarket CLOB when edge exceeds threshold.
-            </p>
-            <ul class="spec-list">
-              <li><strong>Inputs</strong><span>Live Binance perp spot + Polymarket multi-outcome BBA (<code>read_outcome_bba</code>)</span></li>
-              <li><strong>Pricing</strong><span>Analytical digital fair value (swap <code>fair_prob_yes()</code> with <code>OnnxModel::predict()</code>)</span></li>
-              <li><strong>Execution</strong><span>Native Polymarket CLOB <code>LIMIT</code> orders with <code>clob_id</code>, tick rounding, and inventory caps</span></li>
-            </ul>
-            <div class="example-links">
-              <a href="/strategies/#polymarket-digital-options">Read walkthrough →</a>
-              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp">View C++ source</a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section>
         <div class="sec-kicker">Compiled C++ Code</div>
-        <h2>Read the actual strategy and state machine code</h2>
+        <h2>Read the actual strategy and feature code</h2>
         <p class="sec-desc">
-          Register strategies and state machines by name from your own private directory.
+          Keep your proprietary alpha in a private directory and compile it in without forking the engine.
           Use click or Left/Right arrow keys to switch tabs.
         </p>
         <div class="code-shell">
           <div class="tablist" role="tablist" aria-label="Compiled C++ examples">
-            <button class="tab" role="tab" aria-selected="true" tabindex="0" aria-controls="panel-binance" id="tab-binance">
-              1. binance_onnx_perp.cpp
+            <button class="tab" role="tab" aria-selected="true" tabindex="0" aria-controls="panel-poly" id="tab-poly">
+              1. polymarket_digital.cpp
             </button>
-            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-poly" id="tab-poly">
-              2. polymarket_digital.cpp
+            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-binance" id="tab-binance">
+              2. binance_onnx_perp.cpp
             </button>
             <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-sm" id="tab-sm">
               3. spread_sm.cpp
             </button>
           </div>
 
-          <pre class="tabpanel active" id="panel-binance" role="tabpanel" aria-labelledby="tab-binance"><code set:text={codeBinanceOnnx}></code></pre>
+          <pre class="tabpanel active" id="panel-poly" role="tabpanel" aria-labelledby="tab-poly"><code set:text={codePolymarketDigital}></code></pre>
 
-          <pre class="tabpanel" id="panel-poly" role="tabpanel" aria-labelledby="tab-poly"><code set:text={codePolymarketDigital}></code></pre>
+          <pre class="tabpanel" id="panel-binance" role="tabpanel" aria-labelledby="tab-binance"><code set:text={codeBinanceOnnx}></code></pre>
 
           <pre class="tabpanel" id="panel-sm" role="tabpanel" aria-labelledby="tab-sm"><code set:text={codeSpreadSm}></code></pre>
 
@@ -1037,84 +1065,47 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       </section>
 
       <section>
-        <div class="sec-kicker">Differentiator</div>
-        <h2>Why KeronisEngine vs. general-purpose engines</h2>
+        <div class="sec-kicker">Why KeronisEngine</div>
+        <h2>Built for predictive models, not just rule-based scripts</h2>
         <p class="sec-desc">
-          NautilusTrader is a strong general-purpose platform for Python strategies and broad broker catalogs.
-          KeronisEngine is purpose-built when predictive models sit in the hot path.
+          NautilusTrader is a strong general-purpose platform for Python strategies.
+          KeronisEngine is purpose-built when predictive models and sub-millisecond execution sit in the hot path.
         </p>
         <div class="diff-grid">
           <div class="diff-card accent">
-            <h3>KeronisEngine (Predictive-Model Native)</h3>
+            <h3>KeronisEngine</h3>
             <ul>
-              <li><strong>Eliminates feature-code drift between training and serving:</strong> C++ <code>StrategyStateMachine</code>s generate offline Parquet training panels and serve live inference with the same compiled code.</li>
+              <li><strong>Eliminates feature-code drift:</strong> The same compiled C++ feature code generates offline Parquet training sets and serves live inference.</li>
               <li><strong>Sub-millisecond ONNX in-process:</strong> Score gradient boosters or neural nets directly on tick arrival without IPC or Python GIL overhead.</li>
-              <li><strong>Prediction-market &amp; event-market native:</strong> Built-in Polymarket CLOB execution, multi-outcome tickers, and queue-notional backtesting—extensible to sports-betting exchanges.</li>
-              <li><strong>Commodity hardware footprint:</strong> Full Binance live feeds (10k+ msg/s) + continuous predictions on a single ~$100 Linux server.</li>
+              <li><strong>Multi-asset &amp; prediction-market native:</strong> Trade crypto, Polymarket digital options, and US stocks (IBKR) out of the box—and extend cleanly to sports betting or new venues.</li>
+              <li><strong>Complete live stack included:</strong> Ships with the C++ engine, backtester, realistic paper venue, risk/staleness controls, and the Python CCXT/IBKR/venue proxy.</li>
             </ul>
           </div>
           <div class="diff-card">
             <h3>When to pick NautilusTrader or HftBacktest</h3>
             <ul>
-              <li><strong>Pick NautilusTrader</strong> if you want to write strategies in Python and want turnkey adapters across traditional equities, FX, and many crypto brokers out of the box.</li>
-              <li><strong>Pick HftBacktest</strong> if your primary research depends on strict L3 order-queue-position simulation on CEX books in Python/Numba.</li>
-              <li><strong>Keep your alpha private:</strong> With KeronisEngine, external strategies and state machines compile in via <code>-DKERONIS_STRATEGY_DIRS</code> without forking.</li>
+              <li><strong>Pick NautilusTrader</strong> if you prefer writing strategies in Python and want a large ecosystem of Python-native broker adapters.</li>
+              <li><strong>Pick HftBacktest</strong> if your primary research depends on strict L3 order-queue-position simulation on CEX order books in Python/Numba.</li>
+              <li><strong>Deep internals:</strong> Want the low-level threading, book layout, and crash-recovery design? Read the <a href="/architecture/" style="color: var(--cyan); text-decoration: underline;">Architecture docs</a>.</li>
             </ul>
           </div>
         </div>
       </section>
 
       <section>
-        <div class="sec-kicker">System Internals</div>
-        <h2>Modular C++20 components built for live production</h2>
-        <div class="bento">
-          <a href="/architecture/#ringbufferbook" class="card">
-            <div class="card-tag">trading_engine</div>
-            <h3>RingBufferBook</h3>
-            <p>Flat tick-indexed array with 16-byte POD slots, occupancy bitmap + <code>__builtin_ctzll</code> depth walks, lazy mmap pages, and runtime window sizing.</p>
-          </a>
-          <a href="/live-and-paper/" class="card">
-            <div class="card-tag">multi-market</div>
-            <h3>Polymarket, Crypto &amp; Event Markets</h3>
-            <p>Native Polymarket CLOB streams, EIP-712 bulk signing, multi-outcome tickers, and queue-notional backtesting—plus Hyperliquid (Rust signer), Aster, and Lighter L2.</p>
-          </a>
-          <a href="/live-and-paper/#paper-trading-paperexchange" class="card">
-            <div class="card-tag">live_infra</div>
-            <h3>PaperExchange Fill Model</h3>
-            <p>Dedicated-thread paper venue: evaluates taker fills at <code>ack + latency</code>, fills resting remainders against quotes and subsequent prints, and stops fills on cancel.</p>
-          </a>
-          <a href="/architecture/#live-runtime-live_infra" class="card">
-            <div class="card-tag">operations</div>
-            <h3>Durable QuoteHolds &amp; Standby Handoff</h3>
-            <p>Quote pulls survive process restarts, <code>quote_guard</code> staleness heartbeats pull resting entries, and cron standbys inherit cleanly via SQLite heartbeats + file lock.</p>
-          </a>
-          <a href="/state-machines/" class="card">
-            <div class="card-tag">historical_feature_gen</div>
-            <h3>2 Teaching State Machines</h3>
-            <p>Clean, tested reference implementations—<code>windowed_taker_flow</code> (rolling trade-flow buckets) and <code>spread</code> (BBA spread with warmup guard)—ready to copy as templates.</p>
-          </a>
-          <a href="/control-server/" class="card">
-            <div class="card-tag">observability</div>
-            <h3>MPFR Precision &amp; Control Server</h3>
-            <p>Clean-room Apache-2.0 <code>mpreal</code> over shared MPFR/GMP, strict <code>-fno-fast-math</code>, and a localhost HTTP introspection server (<code>/control/engine/*</code>).</p>
-          </a>
-        </div>
-      </section>
-
-      <section>
-        <div class="sec-kicker">Current Scope</div>
+        <div class="sec-kicker">What Ships Out of the Box</div>
         <div class="scope-box">
           <div>
-            <strong>Standalone today</strong>
-            <p>Core engine, 260+ Catch2 tests, 2 teaching state machines, 2 flagship example strategies, ONNX inference, <code>backtest_runner</code>, <code>historical_feature_gen</code>, and <code>PaperExchange</code>.</p>
+            <strong>Offline Research &amp; Simulation</strong>
+            <p>Historical feature generation, Parquet backtester (including Polymarket queue-notional fills), 260+ Catch2 unit tests, 2 flagship strategies, and 2 teaching feature templates.</p>
           </div>
           <div>
-            <strong>Platform</strong>
-            <p>Linux and C++20 (CMake + Ninja + vcpkg + Rust for Hyperliquid signing). No Python strategy API.</p>
+            <strong>Live &amp; Paper Execution Stack</strong>
+            <p>C++20 live engine, dedicated-thread paper venue, PostgreSQL + NATS deployment (<code>deploy/docker-compose.yml</code>), and the bundled Python proxy (<code>src/py/cpp_live_proxy</code>) for CCXT exchanges, IBKR equities, Polymarket, Aster, and Hyperliquid.</p>
           </div>
           <div>
-            <strong>Live execution note</strong>
-            <p>Live runs use PostgreSQL + NATS (<code>deploy/docker-compose.yml</code>). Direct-signing venues currently still look up credentials via <code>CCXT_PROXY_BASE_URL</code>; standalone file-based credentials are next.</p>
+            <strong>Platform &amp; License</strong>
+            <p>Linux and C++20 (CMake + Ninja + vcpkg + Rust Hyperliquid signer) plus Python 3.12 for the venue proxy. Apache-2.0 licensed, provided as-is without warranty.</p>
           </div>
         </div>
       </section>
@@ -1126,6 +1117,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="foot-links">
           <a href="/quickstart/">Quickstart</a>
           <a href="/strategies/">Strategies</a>
+          <a href="/live-and-paper/">Live &amp; Proxy</a>
           <a href="/architecture/">Architecture</a>
           <a href="/llms.txt">llms.txt</a>
           <a href="/llms-full.txt">llms-full.txt</a>

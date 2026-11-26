@@ -61,7 +61,7 @@ void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {
 
 Source: [`src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp)
 
-This flagship example shows cross-venue prediction-market execution on short-dated crypto digital options (YES/NO binary markets):
+This flagship example shows cross-venue digital options market making / high-frequency pricing on short-dated YES/NO binary markets:
 
 1. **Cross-venue reference price:** Declares `binance:swap` in `strategy.signal_exchanges` and reads live spot via `engine.get_price(ticker->underlying_symbol, "binance", "swap")`.
 2. **Fair probability:** Computes `P(S_T > K)` from spot, `ticker->strike_price`, and remaining time to `ticker->event_end_time_ms` (replace `fair_prob_yes()` with `OnnxModel::predict()` to plug in an ML probability model).

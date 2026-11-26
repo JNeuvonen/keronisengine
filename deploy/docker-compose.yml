@@ -24,5 +24,19 @@ services:
       - "127.0.0.1:4222:4222"
       - "127.0.0.1:8222:8222"
 
+  ccxt_proxy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.proxy
+    environment:
+      ACCOUNTS_JSON_PATH: /config/accounts.json
+      USE_TESTNET: ${USE_TESTNET:-1}
+      SPAWN_PRIVATE_STREAMS: ${SPAWN_PRIVATE_STREAMS:-1}
+      EMIT_GCP_LOGS: "0"
+    ports:
+      - "127.0.0.1:${CCXT_PROXY_PORT:-8000}:8000"
+    volumes:
+      - ./accounts.json:/config/accounts.json:ro
+
 volumes:
   pgdata:

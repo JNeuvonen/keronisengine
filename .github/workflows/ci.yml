@@ -18,6 +18,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  proxy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install --no-cache-dir -r src/py/cpp_live_proxy/cpp_live_proxy/requirements.txt
+          pip install --no-cache-dir --no-deps ./src/py/cpp_live_proxy
+          CPP_LIVE_PROXY_TEST_MODE=1 python3 -c "import cpp_live_proxy.main as m; assert len(m.app.routes) > 20"
+
   build:
     runs-on: ubuntu-24.04
     env:

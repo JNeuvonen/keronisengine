@@ -57,14 +57,14 @@ See [Strategies](strategies.md) for both flagship compiled examples (`binance_on
 | **Hyperliquid** | Native WS | Native (Rust signer) | Mainnet and testnet (`HYPERLIQUID_USE_TESTNET=1`) |
 | **Aster** | Native WS | Native | Mainnet and testnet (`ASTER_USE_TESTNET=1`) |
 | **Lighter** | Native REST + L2 WS | `PaperExchange` | Nonce-checked `LighterOrderBook` and `DepthHistory` |
-| **Binance / Bybit / others** | Native / Parquet | External proxy | Via `CCXT_PROXY_BASE_URL` (not bundled in this repo) |
-| **Custom venues / sports betting** | Modular `MarketDataStreams` | Modular `StateUpdater` / `TradeTicker` | Binary/multi-outcome `TradeTicker` support already built for Polymarket |
+| **Binance / Bybit / OKX / Gate.io / Bitget / Coinbase** | Native / Parquet | Bundled `cpp_live_proxy` | CCXT execution + user-data WS (`src/py/cpp_live_proxy`) |
+| **US Equities (IBKR)** | IBKR / Parquet | Bundled `cpp_live_proxy` | Interactive Brokers session & US equity catalog |
+| **Sports betting / custom event markets** | Modular streams | Modular ticker & proxy | Multi-outcome ticker architecture built for Polymarket extends cleanly |
 
-## Current scope & limitations
+## Current scope
 
-- **Platform:** Linux and C++20 only (no Python strategy API).
-- **Standalone today:** Core engine, 260+ unit tests, 2 teaching state machines (`windowed_taker_flow`, `spread`), 2 flagship example strategies (`binance_onnx_perp`, `polymarket_digital`), ONNX inference, `backtest_runner`, `historical_feature_gen`, and `PaperExchange`.
-- **Live execution note:** Live deployments require PostgreSQL and NATS (`deploy/docker-compose.yml` + `deploy/schema.sql`). Direct-signing order submission currently still queries `CCXT_PROXY_BASE_URL` for credential lookup; a standalone file-based credential path is next.
+- **Platform:** Linux, C++20 (engine), Rust (Hyperliquid signer), and Python 3.12 (bundled `cpp_live_proxy`).
+- **Included out of the box:** Core engine, 260+ unit tests, 2 teaching feature state machines (`windowed_taker_flow`, `spread`), 2 flagship strategies (`polymarket_digital`, `binance_onnx_perp`), ONNX inference, `backtest_runner`, `historical_feature_gen`, `PaperExchange`, and the full `deploy/docker-compose.yml` stack (PostgreSQL + NATS + `cpp_live_proxy`).
 
 ## Documentation
 

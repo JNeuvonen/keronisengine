@@ -28,7 +28,8 @@ Documentation: **[engine.keronis.ai](https://engine.keronis.ai/)** · Machine-re
 | `backtest_runner` | Offline Parquet replay; outputs `summary.json`, `trades.json`, `equity_curve.json` |
 | `historical_feature_gen` | Offline replay of registered state machines to build Parquet ML training sets |
 | `engine_control_server` | Embedded localhost HTTP server for inspecting orders, inventory, books, and health |
-| `strategies/` | Flagship examples: `binance_onnx_perp`, `polymarket_digital`; plus `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
+| `strategies/` | Flagship examples: `polymarket_digital`, `binance_onnx_perp`; plus `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
+| `src/py/cpp_live_proxy` | Bundled FastAPI venue proxy for CCXT crypto exchanges (Binance, Bybit, OKX, Gate.io, Bitget, Coinbase), US equities (IBKR), user-data WebSockets, and direct-signing credentials |
 
 ## Streaming features → ONNX → order
 
@@ -84,7 +85,7 @@ See [Quickstart](https://engine.keronis.ai/quickstart/), [Architecture](https://
 
 ## Status and disclaimer
 
-Core engine, unit tests, streaming state machines, ONNX inference, `backtest_runner`, `historical_feature_gen`, and `PaperExchange` run standalone today. Live execution requires PostgreSQL, NATS, and (currently) an external proxy (`CCXT_PROXY_BASE_URL`, not published in this repo) for credential lookup and non-native venues; a standalone file-based credential path is next.
+The full stack ships in this repository: C++20 engine, 260+ Catch2 tests, streaming feature state machines, ONNX Runtime inference, `backtest_runner`, `historical_feature_gen`, `PaperExchange`, `deploy/docker-compose.yml` (PostgreSQL + NATS + `cpp_live_proxy`), and `src/py/cpp_live_proxy` for CCXT exchanges, IBKR equities, and venue credentials.
 
 Provided as-is under Apache-2.0 with no warranty. Automated trading carries risk of financial loss.
 
