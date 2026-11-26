@@ -1,7 +1,9 @@
 ---
-const title = 'KeronisEngine — Sub-ms Trading & Predictive-Model Execution Engine';
+import { Code } from '@astrojs/starlight/components';
+
+const title = 'KeronisEngine — Sub-ms Trading Engine for High-Performance Predictive Models';
 const description =
-  'Open-source C++20 trading engine built for predictive models and high-frequency execution. Trade crypto, Polymarket, stocks (IBKR), and event or sports markets from one system.';
+  'Open-source C++20 trading engine engineered for high-performance predictive models and any algorithmic strategy. Trade crypto, Polymarket, US equities (IBKR), and event or sports markets from one system.';
 
 const codePolymarketDigital = `// src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp
 // Polymarket digital options market making / high-frequency pricer:
@@ -115,7 +117,7 @@ std::vector<Core::StrategyDecision> on_market_event(
 KERONIS_REGISTER_STRATEGY("binance_onnx_perp", bind_binance_onnx_perp);`;
 
 const codeSpreadSm = `// src/cpp/packages/historical_feature_gen/src/transformations/spread_sm.cpp
-// Streaming feature example: runs identically in offline Parquet training panels,
+// Streaming feature template: runs identically in offline Parquet training panels,
 // historical backtests, paper trading, and live execution.
 void SpreadSM::react_impl(const MarketData::MarketEvent& event) {
     if (event.type != MarketData::MarketEvent::BBA || !event.bba.has_value()) return;
@@ -161,12 +163,12 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
     <style>
       :root {
         color-scheme: dark;
-        --bg: #07090e;
-        --bg-elevated: #0c1018;
-        --bg-card: #0e131e;
-        --border: #1b2434;
-        --border-bright: #28364d;
-        --text: #eef2f7;
+        --bg: #05070c;
+        --bg-surface: #0a0e17;
+        --bg-card: #0d121e;
+        --border: rgba(148, 163, 184, 0.12);
+        --border-bright: rgba(148, 163, 184, 0.24);
+        --text: #f1f5f9;
         --text-muted: #94a3b8;
         --text-dim: #64748b;
         --cyan: #22d3ee;
@@ -191,6 +193,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         font-family: var(--font-sans);
         -webkit-font-smoothing: antialiased;
         line-height: 1.6;
+        overflow-x: hidden;
       }
 
       a {
@@ -198,32 +201,91 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         text-decoration: none;
       }
 
-      .backdrop {
+      /* Ambient Nautilus-inspired lighting + subtle grid */
+      .ambient {
         position: fixed;
         inset: 0;
         pointer-events: none;
         z-index: 0;
+        overflow: hidden;
+      }
+
+      .ambient-grid {
+        position: absolute;
+        inset: 0;
         background-image:
-          radial-gradient(ellipse 75% 45% at 50% -8%, rgba(34, 211, 238, 0.13), transparent 70%),
-          radial-gradient(ellipse 40% 35% at 85% 18%, rgba(52, 211, 153, 0.07), transparent 65%),
-          radial-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px);
-        background-size: 100% 100%, 100% 100%, 28px 28px;
+          linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+        background-size: 64px 64px;
+        mask-image: radial-gradient(ellipse 80% 60% at 50% 10%, #000 30%, transparent 100%);
+      }
+
+      .orb {
+        position: absolute;
+        border-radius: 999px;
+        filter: blur(95px);
+        opacity: 0.42;
+        will-change: transform;
+      }
+
+      .orb-1 {
+        width: 620px;
+        height: 420px;
+        top: -160px;
+        left: calc(50% - 310px);
+        background: radial-gradient(circle, rgba(34, 211, 238, 0.42), rgba(14, 165, 233, 0.08) 65%, transparent 100%);
+      }
+
+      .orb-2 {
+        width: 480px;
+        height: 360px;
+        top: 180px;
+        right: -120px;
+        background: radial-gradient(circle, rgba(52, 211, 153, 0.24), transparent 70%);
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .orb-1 {
+          animation: orbFloat 18s ease-in-out infinite alternate;
+        }
+        .orb-2 {
+          animation: orbFloatAlt 22s ease-in-out infinite alternate;
+        }
+      }
+
+      @keyframes orbFloat {
+        0% {
+          transform: translate3d(-24px, 0, 0) scale(1);
+        }
+        100% {
+          transform: translate3d(28px, 18px, 0) scale(1.06);
+        }
+      }
+
+      @keyframes orbFloatAlt {
+        0% {
+          transform: translate3d(0, 0, 0) scale(1);
+        }
+        100% {
+          transform: translate3d(-32px, 24px, 0) scale(1.08);
+        }
       }
 
       .wrap {
         position: relative;
         z-index: 1;
-        max-width: 1140px;
+        max-width: 1120px;
         margin: 0 auto;
         padding: 0 1.5rem;
       }
 
+      /* Header */
       header {
         position: sticky;
         top: 0;
-        z-index: 20;
-        backdrop-filter: blur(14px);
-        background: rgba(7, 9, 14, 0.8);
+        z-index: 30;
+        backdrop-filter: blur(16px);
+        background: rgba(5, 7, 12, 0.72);
         border-bottom: 1px solid var(--border);
       }
 
@@ -240,16 +302,20 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         align-items: center;
         gap: 0.65rem;
         font-weight: 700;
-        font-size: 1.02rem;
+        font-size: 1rem;
         letter-spacing: -0.02em;
       }
 
       .nav-links {
         display: flex;
         align-items: center;
-        gap: 1.4rem;
-        font-size: 0.9rem;
+        gap: 1.5rem;
+        font-size: 0.88rem;
         color: var(--text-muted);
+      }
+
+      .nav-links a {
+        transition: color 0.15s ease;
       }
 
       .nav-links a:hover {
@@ -260,35 +326,37 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         display: inline-flex;
         align-items: center;
         gap: 0.45rem;
-        padding: 0.42rem 0.8rem;
-        border-radius: 0.45rem;
+        padding: 0.4rem 0.85rem;
+        border-radius: 999px;
         border: 1px solid var(--border-bright);
         color: var(--text) !important;
-        font-size: 0.85rem;
+        font-size: 0.84rem;
         font-weight: 500;
-        background: rgba(255, 255, 255, 0.02);
+        background: rgba(255, 255, 255, 0.03);
       }
 
       .nav-gh:hover {
         border-color: var(--cyan);
       }
 
+      /* Centered Hero */
       .hero {
-        padding: clamp(3.2rem, 7vw, 5.8rem) 0 2.6rem;
+        text-align: center;
+        padding: clamp(4.2rem, 9vw, 7rem) 0 3.5rem;
       }
 
       .eyebrow {
         display: inline-flex;
         align-items: center;
-        gap: 0.5rem;
+        gap: 0.55rem;
         font-family: var(--font-mono);
-        font-size: 0.76rem;
-        color: var(--cyan);
-        background: var(--cyan-soft);
-        border: 1px solid rgba(34, 211, 238, 0.28);
-        padding: 0.3rem 0.75rem;
+        font-size: 0.75rem;
+        color: #a5f3fc;
+        background: rgba(34, 211, 238, 0.08);
+        border: 1px solid rgba(34, 211, 238, 0.25);
+        padding: 0.34rem 0.85rem;
         border-radius: 999px;
-        margin-bottom: 1.35rem;
+        margin-bottom: 1.6rem;
       }
 
       .eyebrow-dot {
@@ -300,44 +368,45 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       }
 
       h1 {
-        font-size: clamp(2.35rem, 5.2vw, 4rem);
-        line-height: 1.05;
-        letter-spacing: -0.035em;
+        font-size: clamp(2.5rem, 6vw, 4.4rem);
+        line-height: 1.04;
+        letter-spacing: -0.04em;
         font-weight: 800;
-        margin: 0 0 1.2rem;
-        max-width: 18ch;
+        margin: 0 auto 1.35rem;
+        max-width: 17ch;
       }
 
       .grad {
-        background: linear-gradient(110deg, #f8fafc 15%, #67e8f9 65%, #34d399 100%);
+        background: linear-gradient(110deg, #ffffff 10%, #67e8f9 55%, #34d399 100%);
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
       }
 
       .lead {
-        font-size: clamp(1.03rem, 1.4vw, 1.18rem);
+        font-size: clamp(1.02rem, 1.45vw, 1.18rem);
         color: var(--text-muted);
-        max-width: 66ch;
-        margin: 0 0 1.9rem;
+        max-width: 64ch;
+        margin: 0 auto 2.1rem;
       }
 
       .actions {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.75rem;
-        margin-bottom: 1.5rem;
+        justify-content: center;
+        gap: 0.8rem;
+        margin-bottom: 1.65rem;
       }
 
       .btn {
         display: inline-flex;
         align-items: center;
         gap: 0.45rem;
-        padding: 0.75rem 1.3rem;
-        border-radius: 0.5rem;
+        padding: 0.78rem 1.45rem;
+        border-radius: 999px;
         font-size: 0.92rem;
         font-weight: 600;
-        transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+        transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
       }
 
       .btn:hover {
@@ -345,12 +414,13 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       }
 
       .btn-primary {
-        background: var(--cyan);
-        color: #06131a;
+        background: linear-gradient(135deg, #22d3ee, #34d399);
+        color: #041218;
+        box-shadow: 0 0 28px rgba(34, 211, 238, 0.24);
       }
 
       .btn-secondary {
-        background: var(--bg-card);
+        background: rgba(13, 18, 30, 0.85);
         border: 1px solid var(--border-bright);
         color: var(--text);
       }
@@ -364,12 +434,12 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         align-items: center;
         gap: 0.75rem;
         max-width: 100%;
-        padding: 0.65rem 0.95rem;
-        border-radius: 0.55rem;
+        padding: 0.6rem 0.95rem;
+        border-radius: 999px;
         border: 1px solid var(--border);
-        background: var(--bg-elevated);
+        background: rgba(10, 14, 23, 0.85);
         font-family: var(--font-mono);
-        font-size: 0.82rem;
+        font-size: 0.8rem;
         color: #cbd5e1;
         overflow-x: auto;
       }
@@ -383,10 +453,10 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         background: transparent;
         border: 1px solid var(--border-bright);
         color: var(--text-muted);
-        border-radius: 0.35rem;
-        padding: 0.25rem 0.55rem;
+        border-radius: 999px;
+        padding: 0.22rem 0.65rem;
         font-family: var(--font-mono);
-        font-size: 0.74rem;
+        font-size: 0.72rem;
         cursor: pointer;
         flex-shrink: 0;
       }
@@ -396,240 +466,416 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         border-color: var(--cyan);
       }
 
-      .metrics {
+      /* Hairline stat bar */
+      .stat-strip {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 0.9rem;
-        margin: 2.6rem 0 0;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+        margin: 3.2rem 0 0;
+        text-align: left;
       }
 
-      .metric {
-        padding: 1.1rem 1.2rem;
-        border-radius: 0.7rem;
-        background: var(--bg-card);
-        border: 1px solid var(--border);
+      .stat {
+        padding: 1.35rem 1.25rem;
+        border-right: 1px solid var(--border);
       }
 
-      .metric-val {
+      .stat:last-child {
+        border-right: none;
+      }
+
+      .stat-val {
         font-family: var(--font-mono);
-        font-size: 1.42rem;
+        font-size: 1.35rem;
         font-weight: 700;
-        color: var(--text);
         letter-spacing: -0.02em;
+        color: var(--text);
       }
 
-      .metric-val span {
+      .stat-val span {
         color: var(--cyan);
       }
 
-      .metric-lbl {
-        margin-top: 0.35rem;
-        font-size: 0.83rem;
+      .stat-lbl {
+        margin-top: 0.3rem;
+        font-size: 0.82rem;
         color: var(--text-muted);
+        line-height: 1.45;
       }
 
+      /* Sections */
       section {
-        margin-bottom: 4.4rem;
+        margin-bottom: 5.5rem;
+      }
+
+      .sec-head {
+        margin-bottom: 1.9rem;
       }
 
       .sec-kicker {
         font-family: var(--font-mono);
-        font-size: 0.76rem;
+        font-size: 0.75rem;
         text-transform: uppercase;
-        letter-spacing: 0.09em;
+        letter-spacing: 0.1em;
         color: var(--cyan);
-        margin-bottom: 0.45rem;
+        margin-bottom: 0.5rem;
       }
 
       h2 {
-        font-size: clamp(1.5rem, 2.7vw, 2.1rem);
-        letter-spacing: -0.025em;
-        margin: 0 0 0.65rem;
-        line-height: 1.18;
+        font-size: clamp(1.65rem, 3.1vw, 2.35rem);
+        letter-spacing: -0.03em;
+        margin: 0 0 0.7rem;
+        line-height: 1.15;
       }
 
       .sec-desc {
         color: var(--text-muted);
         max-width: 68ch;
-        margin: 0 0 1.65rem;
-        font-size: 0.97rem;
-      }
-
-      /* Architecture schematic SVG */
-      .diagram-shell {
-        border-radius: 0.8rem;
-        border: 1px solid var(--border-bright);
-        background: linear-gradient(180deg, rgba(12, 16, 26, 0.96), rgba(8, 11, 18, 0.98));
-        padding: 1.25rem;
-        overflow-x: auto;
-      }
-
-      .diagram-shell svg {
-        display: block;
-        width: 100%;
-        min-width: 740px;
-        height: auto;
-      }
-
-      /* Market & strategy coverage grid */
-      .bento {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-        gap: 1rem;
-      }
-
-      .card {
-        padding: 1.35rem;
-        border-radius: 0.75rem;
-        border: 1px solid var(--border);
-        background: var(--bg-card);
-        transition: border-color 0.15s ease;
-      }
-
-      .card:hover {
-        border-color: var(--border-bright);
-      }
-
-      .card-tag {
-        font-family: var(--font-mono);
-        font-size: 0.72rem;
-        color: var(--cyan);
-        margin-bottom: 0.4rem;
-      }
-
-      .card h3 {
-        margin: 0 0 0.45rem;
-        font-size: 1.02rem;
-      }
-
-      .card p {
         margin: 0;
-        font-size: 0.87rem;
-        color: var(--text-muted);
+        font-size: 0.98rem;
       }
 
-      /* Flagship examples */
-      .examples-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        gap: 1.1rem;
-      }
-
-      .example-card {
-        display: flex;
-        flex-direction: column;
-        padding: 1.5rem;
-        border-radius: 0.8rem;
+      /* Interactive Animated Architecture Stage */
+      .stage-shell {
+        border-radius: 1rem;
         border: 1px solid var(--border-bright);
-        background: linear-gradient(180deg, rgba(16, 22, 35, 0.95), rgba(11, 15, 24, 0.98));
+        background:
+          radial-gradient(ellipse 60% 45% at 50% 0%, rgba(34, 211, 238, 0.08), transparent 70%),
+          linear-gradient(180deg, rgba(11, 16, 27, 0.96), rgba(6, 9, 16, 0.98));
+        overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
       }
 
-      .example-card.cyan-accent {
-        border-color: rgba(34, 211, 238, 0.34);
-      }
-
-      .example-card.emerald-accent {
-        border-color: rgba(52, 211, 153, 0.34);
-      }
-
-      .example-head {
+      .stage-bar {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.75rem;
+        padding: 0.75rem 1.1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(9, 13, 22, 0.9);
       }
 
-      .pill {
-        font-family: var(--font-mono);
-        font-size: 0.72rem;
-        padding: 0.22rem 0.6rem;
+      .seg-tabs {
+        display: inline-flex;
+        gap: 0.3rem;
+        background: rgba(15, 23, 42, 0.7);
+        padding: 0.25rem;
         border-radius: 999px;
-        border: 1px solid var(--border-bright);
+        border: 1px solid var(--border);
+      }
+
+      .seg-tab {
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-sans);
+        font-size: 0.82rem;
+        font-weight: 600;
+        padding: 0.42rem 0.95rem;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: color 0.15s ease, background 0.15s ease;
+      }
+
+      .seg-tab[aria-selected='true'] {
+        background: rgba(34, 211, 238, 0.15);
         color: var(--cyan);
-        background: var(--cyan-soft);
       }
 
-      .pill.emerald {
-        color: var(--emerald);
-        background: var(--emerald-soft);
-        border-color: rgba(52, 211, 153, 0.3);
+      .seg-tab:focus-visible,
+      .pause-btn:focus-visible,
+      .asset-tab:focus-visible,
+      .code-tab:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
       }
 
-      .example-card h3 {
-        margin: 0 0 0.45rem;
-        font-size: 1.18rem;
-        letter-spacing: -0.015em;
-      }
-
-      .example-card .summary {
-        margin: 0 0 1.1rem;
-        font-size: 0.9rem;
+      .pause-btn {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        background: transparent;
+        border: 1px solid var(--border-bright);
         color: var(--text-muted);
-      }
-
-      .spec-list {
-        margin: 0 0 1.25rem;
-        padding: 0;
-        list-style: none;
-        display: grid;
-        gap: 0.5rem;
-        font-size: 0.85rem;
-        color: var(--text-muted);
-      }
-
-      .spec-list li {
-        display: grid;
-        grid-template-columns: 88px 1fr;
-        gap: 0.6rem;
-      }
-
-      .spec-list strong {
         font-family: var(--font-mono);
-        font-size: 0.76rem;
-        color: var(--text);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        padding-top: 0.12rem;
+        font-size: 0.74rem;
+        padding: 0.36rem 0.78rem;
+        border-radius: 999px;
+        cursor: pointer;
       }
 
-      .example-links {
-        margin-top: auto;
+      .pause-btn:hover {
+        color: var(--text);
+        border-color: var(--cyan);
+      }
+
+      .stage-view {
+        display: none;
+        padding: 1.4rem 1.25rem 1.2rem;
+        overflow-x: auto;
+      }
+
+      .stage-view.active {
+        display: block;
+      }
+
+      .stage-view svg {
+        display: block;
+        width: 100%;
+        min-width: 760px;
+        height: auto;
+      }
+
+      /* Animated circuit traces */
+      .trace-flow {
+        stroke-dasharray: 8 10;
+      }
+
+      .trace-flow-slow {
+        stroke-dasharray: 6 12;
+      }
+
+      .pulse-ring {
+        transform-box: fill-box;
+        transform-origin: center;
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .stage-shell:not(.is-paused) .trace-flow {
+          animation: flowDash 1.15s linear infinite;
+        }
+        .stage-shell:not(.is-paused) .trace-flow-slow {
+          animation: flowDash 2.1s linear infinite;
+        }
+        .stage-shell:not(.is-paused) .pulse-ring {
+          animation: nodePulse 2.8s ease-in-out infinite;
+        }
+      }
+
+      @keyframes flowDash {
+        from {
+          stroke-dashoffset: 36;
+        }
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes nodePulse {
+        0%,
+        100% {
+          opacity: 0.28;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.75;
+          transform: scale(1.03);
+        }
+      }
+
+      .stage-caption {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.9rem;
-        padding-top: 0.9rem;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.85rem 1.25rem;
         border-top: 1px solid var(--border);
-        font-size: 0.85rem;
-        font-weight: 600;
+        background: rgba(8, 11, 18, 0.85);
+        font-size: 0.83rem;
+        color: var(--text-muted);
       }
 
-      .example-links a {
+      .stage-caption strong {
+        color: var(--text);
+      }
+
+      /* Interactive Multi-Asset Switcher */
+      .asset-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .asset-tab {
+        appearance: none;
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        font-family: var(--font-sans);
+        font-size: 0.86rem;
+        font-weight: 600;
+        padding: 0.58rem 1.05rem;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+      }
+
+      .asset-tab:hover {
+        border-color: var(--border-bright);
+        color: var(--text);
+      }
+
+      .asset-tab[aria-selected='true'] {
+        background: var(--cyan-soft);
+        border-color: rgba(34, 211, 238, 0.42);
         color: var(--cyan);
       }
 
-      .example-links a:hover {
+      .asset-panel {
+        display: none;
+        grid-template-columns: 1.05fr 1fr;
+        gap: 1.5rem;
+        padding: 1.75rem;
+        border-radius: 1rem;
+        border: 1px solid var(--border-bright);
+        background: linear-gradient(180deg, rgba(13, 18, 30, 0.92), rgba(8, 11, 18, 0.96));
+        align-items: center;
+      }
+
+      .asset-panel.active {
+        display: grid;
+      }
+
+      .asset-copy h3 {
+        margin: 0 0 0.65rem;
+        font-size: 1.35rem;
+        letter-spacing: -0.02em;
+      }
+
+      .asset-copy p {
+        margin: 0 0 1.15rem;
+        color: var(--text-muted);
+        font-size: 0.94rem;
+      }
+
+      .venue-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .vpill {
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 0.4rem;
+        border: 1px solid var(--border-bright);
+        background: rgba(15, 23, 42, 0.65);
+        color: #cbd5e1;
+      }
+
+      .vpill.hi {
+        border-color: rgba(52, 211, 153, 0.4);
+        color: var(--emerald);
+        background: var(--emerald-soft);
+      }
+
+      .asset-link {
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: var(--cyan);
+      }
+
+      .asset-link:hover {
         text-decoration: underline;
       }
 
-      /* Code tabs */
-      .code-shell {
+      /* Terminal preview card on right side of asset panel */
+      .sim-card {
         border-radius: 0.75rem;
         border: 1px solid var(--border-bright);
-        background: #0a0e16;
+        background: #070a12;
+        overflow: hidden;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+      }
+
+      .sim-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.6rem 0.9rem;
+        border-bottom: 1px solid var(--border);
+        background: #0c111d;
+        color: var(--text-muted);
+      }
+
+      .sim-badge {
+        color: var(--emerald);
+        font-size: 0.72rem;
+      }
+
+      .sim-body {
+        padding: 0.95rem 1rem;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .sim-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 1rem;
+        color: var(--text-muted);
+      }
+
+      .sim-row strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .sim-row .pos {
+        color: var(--emerald);
+      }
+
+      .sim-row .cy {
+        color: var(--cyan);
+      }
+
+      .sim-row .am {
+        color: var(--amber);
+      }
+
+      .sim-divider {
+        height: 1px;
+        background: var(--border);
+        margin: 0.25rem 0;
+      }
+
+      .sim-action {
+        padding: 0.55rem 0.75rem;
+        border-radius: 0.45rem;
+        background: rgba(52, 211, 153, 0.08);
+        border: 1px solid rgba(52, 211, 153, 0.28);
+        color: #a7f3d0;
+        font-size: 0.76rem;
+      }
+
+      /* Syntax-highlighted code viewer */
+      .code-shell {
+        border-radius: 0.9rem;
+        border: 1px solid var(--border-bright);
+        background: #0d1117;
         overflow: hidden;
       }
 
-      .tablist {
+      .code-tablist {
         display: flex;
         flex-wrap: wrap;
         gap: 0.3rem;
-        padding: 0.55rem 0.75rem;
-        background: #0d121d;
+        padding: 0.6rem 0.85rem;
+        background: #0a0e16;
         border-bottom: 1px solid var(--border);
       }
 
-      .tab {
+      .code-tab {
         appearance: none;
         border: 1px solid transparent;
         background: transparent;
@@ -641,30 +887,28 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         cursor: pointer;
       }
 
-      .tab:focus-visible {
-        outline: 2px solid var(--cyan);
-        outline-offset: 2px;
-      }
-
-      .tab[aria-selected='true'] {
+      .code-tab[aria-selected='true'] {
         background: var(--cyan-soft);
-        border-color: rgba(34, 211, 238, 0.32);
+        border-color: rgba(34, 211, 238, 0.34);
         color: var(--cyan);
       }
 
-      .tabpanel {
+      .code-panel {
         display: none;
-        margin: 0;
-        padding: 1.25rem 1.4rem;
-        overflow-x: auto;
-        font-family: var(--font-mono);
-        font-size: 0.81rem;
-        line-height: 1.62;
-        color: #dbeafe;
       }
 
-      .tabpanel.active {
+      .code-panel.active {
         display: block;
+      }
+
+      .code-panel :global(pre) {
+        margin: 0 !important;
+        padding: 1.25rem 1.4rem !important;
+        background: #0d1117 !important;
+        font-family: var(--font-mono) !important;
+        font-size: 0.8rem !important;
+        line-height: 1.62 !important;
+        overflow-x: auto;
       }
 
       .code-foot {
@@ -673,8 +917,8 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        padding: 0.75rem 1.25rem;
-        background: #0d121d;
+        padding: 0.8rem 1.25rem;
+        background: #0a0e16;
         border-top: 1px solid var(--border);
         font-size: 0.82rem;
         color: var(--text-muted);
@@ -690,62 +934,59 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         font-weight: 600;
       }
 
-      /* Differentiator 2-col */
-      .diff-grid {
+      /* Full stack 3-col */
+      .stack-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
         gap: 1rem;
       }
 
-      .diff-card {
-        padding: 1.45rem;
-        border-radius: 0.75rem;
+      .stack-card {
+        padding: 1.5rem;
+        border-radius: 0.85rem;
         border: 1px solid var(--border);
         background: var(--bg-card);
       }
 
-      .diff-card.accent {
-        border-color: rgba(34, 211, 238, 0.35);
-        background: linear-gradient(180deg, rgba(8, 30, 42, 0.45), rgba(14, 19, 30, 0.96));
-      }
-
-      .diff-card h3 {
-        margin: 0 0 0.75rem;
+      .stack-card h3 {
+        margin: 0 0 0.5rem;
         font-size: 1.05rem;
       }
 
-      .diff-card ul {
+      .stack-card p {
         margin: 0;
-        padding-left: 1.15rem;
+        font-size: 0.89rem;
         color: var(--text-muted);
-        font-size: 0.9rem;
       }
 
-      .diff-card li + li {
-        margin-top: 0.5rem;
+      .stack-tag {
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--cyan);
+        margin-bottom: 0.45rem;
       }
 
-      /* Scope box */
-      .scope-box {
-        padding: 1.35rem 1.5rem;
-        border-radius: 0.75rem;
+      /* Closing ambient CTA */
+      .cta-band {
+        position: relative;
+        text-align: center;
+        padding: 3.4rem 1.75rem;
+        border-radius: 1.1rem;
         border: 1px solid var(--border-bright);
-        background: var(--bg-elevated);
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-        gap: 1.25rem;
-        font-size: 0.88rem;
+        background:
+          radial-gradient(ellipse 70% 80% at 50% 100%, rgba(34, 211, 238, 0.16), transparent 70%),
+          linear-gradient(180deg, rgba(13, 18, 30, 0.9), rgba(7, 10, 17, 0.98));
+        overflow: hidden;
       }
 
-      .scope-box strong {
-        display: block;
-        margin-bottom: 0.3rem;
-        color: var(--text);
+      .cta-band h2 {
+        margin-bottom: 0.65rem;
       }
 
-      .scope-box p {
-        margin: 0;
+      .cta-band p {
         color: var(--text-muted);
+        max-width: 56ch;
+        margin: 0 auto 1.75rem;
       }
 
       footer {
@@ -773,7 +1014,23 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         color: var(--text);
       }
 
-      @media (max-width: 760px) {
+      @media (max-width: 860px) {
+        .stat-strip {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .stat:nth-child(2) {
+          border-right: none;
+        }
+        .stat:nth-child(1),
+        .stat:nth-child(2) {
+          border-bottom: 1px solid var(--border);
+        }
+        .asset-panel {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
         .nav-links a:not(.nav-gh):not(.nav-docs) {
           display: none;
         }
@@ -781,7 +1038,11 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
     </style>
   </head>
   <body>
-    <div class="backdrop" aria-hidden="true"></div>
+    <div class="ambient" aria-hidden="true">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="ambient-grid"></div>
+    </div>
 
     <header>
       <div class="wrap nav">
@@ -796,7 +1057,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <nav class="nav-links" aria-label="Primary">
           <a href="/quickstart/" class="nav-docs">Docs</a>
           <a href="/strategies/">Strategies</a>
-          <a href="/state-machines/">Features &amp; ONNX</a>
+          <a href="/live-and-paper/">Live &amp; Proxy</a>
           <a href="/architecture/">Architecture</a>
           <a href="/comparison/">Comparison</a>
           <a href="https://github.com/JNeuvonen/keronisengine" class="nav-gh">GitHub</a>
@@ -808,19 +1069,19 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       <section class="hero">
         <div class="eyebrow">
           <span class="eyebrow-dot"></span>
-          Apache-2.0 · C++20 + Bundled Venue Proxy · Sub-ms ONNX Inference
+          Apache-2.0 · C++20 Engine + Bundled Venue Proxy · In-Process ONNX
         </div>
-        <h1>Focus on alpha. Run <span class="grad">predictive models</span> on any market.</h1>
+        <h1>Sub-millisecond execution for <span class="grad">predictive models.</span></h1>
         <p class="lead">
-          KeronisEngine is a full-stack trading engine built for predictive models and high-frequency execution.
-          Generate training features, backtest, paper trade, and execute live across crypto, Polymarket,
-          US equities, and event or sports markets—using the same compiled code on a single ~$100 Linux server.
+          Engineered for high-performance predictive models—and built to execute any algorithmic strategy
+          you can implement. Trade crypto, Polymarket, US equities, and event or sports markets from one
+          system, with train/serve parity and trivial extensibility for new data sources.
         </p>
 
         <div class="actions">
-          <a href="/strategies/#polymarket-digital-options" class="btn btn-primary">Polymarket Market Making →</a>
+          <a href="/quickstart/" class="btn btn-primary">Get Started →</a>
+          <a href="/strategies/#polymarket-digital-options" class="btn btn-secondary">Polymarket Market Making</a>
           <a href="/strategies/#binance-onnx-perp" class="btn btn-secondary">Binance ONNX Example</a>
-          <a href="/quickstart/" class="btn btn-secondary">Quickstart</a>
         </div>
 
         <div class="cmd-bar">
@@ -829,284 +1090,470 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <button type="button" class="copy-btn" id="copy-cmd">Copy</button>
         </div>
 
-        <div class="metrics">
-          <div class="metric">
-            <div class="metric-val"><span>&lt;1 ms</span> tick-to-order</div>
-            <div class="metric-lbl">Real-time feature update, in-process ONNX inference, and risk-checked order decision</div>
+        <div class="stat-strip">
+          <div class="stat">
+            <div class="stat-val"><span>&lt;1 ms</span> tick-to-order</div>
+            <div class="stat-lbl">Streaming feature update, ONNX inference, and risk-checked order decision in one process</div>
           </div>
-          <div class="metric">
-            <div class="metric-val"><span>10,000+</span> msg/s</div>
-            <div class="metric-lbl">Full-exchange crypto feeds + continuous ML scoring on one ~$100 Linux box</div>
+          <div class="stat">
+            <div class="stat-val"><span>10,000+</span> msg/s</div>
+            <div class="stat-lbl">Full-exchange feeds + continuous model scoring on a single ~$100 Linux box</div>
           </div>
-          <div class="metric">
-            <div class="metric-val"><span>Multi-asset</span> ready</div>
-            <div class="metric-lbl">Crypto, Polymarket, US stocks (IBKR), and modular adapters for sports betting</div>
+          <div class="stat">
+            <div class="stat-val"><span>1</span> feature engine</div>
+            <div class="stat-lbl">Exact same compiled C++ code builds training panels and runs live inference</div>
           </div>
-          <div class="metric">
-            <div class="metric-val"><span>Full stack</span> included</div>
-            <div class="metric-lbl">Engine, feature pipeline, backtester, paper exchange, and bundled CCXT/IBKR proxy</div>
-          </div>
-        </div>
-      </section>
-
-      <section>
-        <div class="sec-kicker">What It Generalizes To</div>
-        <h2>One engine for every market and trading style</h2>
-        <p class="sec-desc">
-          The core engine treats venues, order books, multi-outcome contracts, and execution routes as clean interfaces—so
-          the same research-to-live workflow powers directional ML, high-frequency market making, cross-venue arbitrage, and options pricing.
-        </p>
-        <div class="bento">
-          <div class="card">
-            <div class="card-tag">Crypto Spot &amp; Perps</div>
-            <h3>Direct &amp; CCXT Execution</h3>
-            <p>Native Hyperliquid, Aster, and Lighter L2 feeds—plus Binance, Bybit, OKX, Gate.io, Bitget, and Coinbase via the bundled Python venue proxy.</p>
-          </div>
-          <div class="card">
-            <div class="card-tag">Prediction Markets</div>
-            <h3>Native Polymarket CLOB</h3>
-            <p>Multi-outcome order books, live CLOB WebSockets, native EIP-712 bulk signing, and queue-notional backtesting for short-dated digital options and event markets.</p>
-          </div>
-          <div class="card">
-            <div class="card-tag">Equities &amp; Stocks</div>
-            <h3>Interactive Brokers (IBKR)</h3>
-            <p>Built-in IBKR session management, US equity catalog, and order lifecycle routing through the bundled proxy—run equity models on the same stack.</p>
-          </div>
-          <div class="card">
-            <div class="card-tag">Sports Betting &amp; Custom Venues</div>
-            <h3>Extensible Outcome Markets</h3>
-            <p>Binary and multi-outcome tickers built for Polymarket map cleanly to sportsbooks, betting exchanges, or any custom feed—plug in a stream and trade.</p>
+          <div class="stat">
+            <div class="stat-val"><span>Full stack</span> included</div>
+            <div class="stat-lbl">C++20 engine, backtester, paper venue, and bundled CCXT / IBKR venue proxy</div>
           </div>
         </div>
       </section>
 
+      <!-- Animated Architecture Section -->
       <section>
-        <div class="sec-kicker">Flagship Examples</div>
-        <h2>Two real, compiled strategies to learn from</h2>
-        <p class="sec-desc">
-          Both examples compile into the engine, are verified by unit tests, and show the exact APIs used in production—ready to adapt to your own models and markets.
-        </p>
-        <div class="examples-grid">
-          <div class="example-card emerald-accent">
-            <div class="example-head">
-              <span class="pill emerald">polymarket_digital</span>
-              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Prediction Markets · Market Making</span>
+        <div class="sec-head">
+          <div class="sec-kicker">Architecture</div>
+          <h2>Engineered for high-performance predictive models</h2>
+          <p class="sec-desc">
+            Every core ingredient for algorithmic trading is built in—capable of executing any strategy
+            from ML directional models to high-frequency market making. Missing a data source or venue?
+            Plug in a new stream and trade.
+          </p>
+        </div>
+
+        <div class="stage-shell" id="arch-stage">
+          <div class="stage-bar">
+            <div class="seg-tabs" role="tablist" aria-label="Architecture views">
+              <button class="seg-tab" role="tab" aria-selected="true" tabindex="0" aria-controls="view-live" id="tab-view-live">
+                Live Inference Flow
+              </button>
+              <button class="seg-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="view-parity" id="tab-view-parity">
+                Train / Serve Parity
+              </button>
             </div>
+            <button type="button" class="pause-btn" id="toggle-anim">Pause animation</button>
+          </div>
+
+          <!-- VIEW 1: Animated Live Inference Flow -->
+          <div class="stage-view active" id="view-live" role="tabpanel" aria-labelledby="tab-view-live">
+            <svg viewBox="0 0 1040 280" role="img" aria-label="Animated live execution dataflow from market feeds through streaming features and in-process ONNX inference to multi-venue execution" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <filter id="glow-cyan" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="3.5" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <linearGradient id="grad-hot" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#22d3ee" />
+                  <stop offset="50%" stop-color="#38bdf8" />
+                  <stop offset="100%" stop-color="#34d399" />
+                </linearGradient>
+              </defs>
+
+              <!-- Background rails -->
+              <path d="M 164 62 L 210 62 L 210 138 L 244 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 164 138 L 244 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 164 214 L 210 214 L 210 138 L 244 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+
+              <path d="M 426 138 L 468 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 650 138 L 692 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 852 138 L 884 138 L 884 62 L 902 62" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 852 138 L 902 138" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+              <path d="M 852 138 L 884 138 L 884 214 L 902 214" fill="none" stroke="rgba(148,163,184,0.22)" stroke-width="2" />
+
+              <!-- Animated glowing traces -->
+              <path class="trace-flow" d="M 164 62 L 210 62 L 210 138 L 244 138" fill="none" stroke="#22d3ee" stroke-width="2.2" filter="url(#glow-cyan)" />
+              <path class="trace-flow-slow" d="M 164 138 L 244 138" fill="none" stroke="#34d399" stroke-width="2.2" filter="url(#glow-cyan)" />
+              <path class="trace-flow" d="M 164 214 L 210 214 L 210 138 L 244 138" fill="none" stroke="#38bdf8" stroke-width="2" />
+
+              <path class="trace-flow" d="M 426 138 L 468 138" fill="none" stroke="url(#grad-hot)" stroke-width="2.6" filter="url(#glow-cyan)" />
+              <path class="trace-flow" d="M 650 138 L 692 138" fill="none" stroke="url(#grad-hot)" stroke-width="2.6" filter="url(#glow-cyan)" />
+              <path class="trace-flow" d="M 852 138 L 884 138 L 884 62 L 902 62" fill="none" stroke="#34d399" stroke-width="2.2" filter="url(#glow-cyan)" />
+              <path class="trace-flow-slow" d="M 852 138 L 902 138" fill="none" stroke="#22d3ee" stroke-width="2.2" />
+              <path class="trace-flow" d="M 852 138 L 884 138 L 884 214 L 902 214" fill="none" stroke="#fbbf24" stroke-width="2" />
+
+              <!-- Left: Market Data Sources -->
+              <rect x="16" y="34" width="148" height="56" rx="10" fill="#0d1320" stroke="rgba(34,211,238,0.35)" />
+              <text x="30" y="58" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="700">Crypto Feeds</text>
+              <text x="30" y="76" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">Binance · HL · Aster</text>
+
+              <rect x="16" y="110" width="148" height="56" rx="10" fill="#0d1320" stroke="rgba(52,211,153,0.38)" />
+              <text x="30" y="134" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="700">Polymarket CLOB</text>
+              <text x="30" y="152" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">Multi-outcome L2</text>
+
+              <rect x="16" y="186" width="148" height="56" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="30" y="210" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="700">Equities &amp; Custom</text>
+              <text x="30" y="228" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">IBKR · Sports · Any</text>
+
+              <!-- Core Process Boundary -->
+              <rect x="232" y="22" width="632" height="234" rx="14" fill="rgba(34,211,238,0.03)" stroke="rgba(34,211,238,0.24)" stroke-dasharray="5 5" />
+              <text x="248" y="44" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600" letter-spacing="0.8">SINGLE C++20 PROCESS · SUB-MILLISECOND HOT PATH</text>
+
+              <!-- Node 1: Books & Features -->
+              <rect class="pulse-ring" x="244" y="88" width="182" height="100" rx="12" fill="none" stroke="#22d3ee" stroke-width="1" />
+              <rect x="244" y="88" width="182" height="100" rx="12" fill="#0d1826" stroke="#22d3ee" stroke-width="1.4" />
+              <text x="260" y="116" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="10">01 · INGEST &amp; FEATURES</text>
+              <text x="260" y="140" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="700">Streaming Features</text>
+              <text x="260" y="160" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Order books + rolling</text>
+              <text x="260" y="175" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">state updated per tick</text>
+
+              <!-- Node 2: In-Process ONNX -->
+              <rect class="pulse-ring" x="468" y="88" width="182" height="100" rx="12" fill="none" stroke="#34d399" stroke-width="1" />
+              <rect x="468" y="88" width="182" height="100" rx="12" fill="#0c1c1e" stroke="#34d399" stroke-width="1.5" />
+              <text x="484" y="116" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="10">02 · MODEL SCORING</text>
+              <text x="484" y="140" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="700">ONNX Runtime</text>
+              <text x="484" y="160" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">LightGBM · XGB · PyTorch</text>
+              <text x="484" y="175" fill="#a7f3d0" font-family="JetBrains Mono, monospace" font-size="10.5">Zero IPC / Python hops</text>
+
+              <!-- Node 3: Strategy & Risk -->
+              <rect x="692" y="88" width="160" height="100" rx="12" fill="#0d1320" stroke="rgba(148,163,184,0.4)" stroke-width="1.3" />
+              <text x="708" y="116" fill="#fbbf24" font-family="JetBrains Mono, monospace" font-size="10">03 · DECISION</text>
+              <text x="708" y="140" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="700">Strategy &amp; Risk</text>
+              <text x="708" y="160" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Caps · Rate limits</text>
+              <text x="708" y="175" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Staleness guards</text>
+
+              <!-- Right: Execution Targets -->
+              <rect x="902" y="34" width="122" height="56" rx="10" fill="#0c1d18" stroke="rgba(52,211,153,0.45)" />
+              <text x="915" y="58" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="700">Direct Sign</text>
+              <text x="915" y="76" fill="#6ee7b7" font-family="JetBrains Mono, monospace" font-size="9.5">Polymarket · HL</text>
+
+              <rect x="902" y="110" width="122" height="56" rx="10" fill="#0d1522" stroke="rgba(34,211,238,0.4)" />
+              <text x="915" y="134" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="700">Venue Proxy</text>
+              <text x="915" y="152" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="9.5">CCXT · IBKR</text>
+
+              <rect x="902" y="186" width="122" height="56" rx="10" fill="#17140d" stroke="rgba(251,191,36,0.4)" />
+              <text x="915" y="210" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="700">Paper / Sim</text>
+              <text x="915" y="228" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="9.5">Depth + latency</text>
+            </svg>
+          </div>
+
+          <!-- VIEW 2: Animated Train / Serve Parity -->
+          <div class="stage-view" id="view-parity" role="tabpanel" aria-labelledby="tab-view-parity">
+            <svg viewBox="0 0 1040 280" role="img" aria-label="Animated train and serve parity diagram showing offline training and live execution sharing the exact same compiled C++ feature code" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <filter id="glow-p" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+              </defs>
+
+              <text x="20" y="28" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600" letter-spacing="1">OFFLINE RESEARCH &amp; TRAINING</text>
+              <text x="20" y="176" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600" letter-spacing="1">LIVE / PAPER / BACKTEST EXECUTION</text>
+
+              <!-- Shared Feature Column -->
+              <rect x="388" y="34" width="214" height="232" rx="14" fill="rgba(34,211,238,0.06)" stroke="rgba(34,211,238,0.45)" stroke-dasharray="5 5" />
+              <text x="495" y="154" text-anchor="middle" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600">EXACT SAME C++ BINARY CODE</text>
+
+              <!-- Animated Traces: Top Row -->
+              <path class="trace-flow-slow" d="M 176 78 L 218 78" fill="none" stroke="#34d399" stroke-width="2.2" />
+              <path class="trace-flow-slow" d="M 366 78 L 404 78" fill="none" stroke="#34d399" stroke-width="2.2" />
+              <path class="trace-flow-slow" d="M 586 78 L 628 78" fill="none" stroke="#34d399" stroke-width="2.2" />
+              <path class="trace-flow-slow" d="M 806 78 L 844 78" fill="none" stroke="#fbbf24" stroke-width="2.2" />
+
+              <!-- Drop from model.onnx into Live ONNX -->
+              <path class="trace-flow-slow" d="M 934 114 L 934 146 L 717 146 L 717 188" fill="none" stroke="#fbbf24" stroke-width="2.2" filter="url(#glow-p)" />
+
+              <!-- Animated Traces: Bottom Row -->
+              <path class="trace-flow" d="M 176 224 L 218 224" fill="none" stroke="#22d3ee" stroke-width="2.2" />
+              <path class="trace-flow" d="M 366 224 L 404 224" fill="none" stroke="#22d3ee" stroke-width="2.2" />
+              <path class="trace-flow" d="M 586 224 L 628 224" fill="none" stroke="#22d3ee" stroke-width="2.4" filter="url(#glow-p)" />
+              <path class="trace-flow" d="M 806 224 L 844 224" fill="none" stroke="#34d399" stroke-width="2.4" filter="url(#glow-p)" />
+
+              <!-- Top Row Boxes -->
+              <rect x="20" y="44" width="156" height="68" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="34" y="72" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Parquet History</text>
+              <text x="34" y="92" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">OHLCV · Trades · L2</text>
+
+              <rect x="218" y="44" width="148" height="68" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="232" y="72" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Event Replay</text>
+              <text x="232" y="92" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">Timestamp-ordered</text>
+
+              <rect x="404" y="44" width="182" height="68" rx="10" fill="#0d1c28" stroke="#22d3ee" stroke-width="1.5" />
+              <text x="418" y="72" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">C++ Feature Engine</text>
+              <text x="418" y="92" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10">Emit training panels</text>
+
+              <rect x="628" y="44" width="178" height="68" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="642" y="72" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Train in Python</text>
+              <text x="642" y="92" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">LightGBM · XGB · PyTorch</text>
+
+              <rect x="844" y="44" width="176" height="68" rx="10" fill="#17140d" stroke="rgba(251,191,36,0.55)" />
+              <text x="858" y="72" fill="#fde68a" font-family="Inter, sans-serif" font-size="13" font-weight="700">Export model.onnx</text>
+              <text x="858" y="92" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">Versioned artifact</text>
+
+              <!-- Bottom Row Boxes -->
+              <rect x="20" y="190" width="156" height="68" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="34" y="218" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Live Market Ticks</text>
+              <text x="34" y="238" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">WebSockets / Replay</text>
+
+              <rect x="218" y="190" width="148" height="68" rx="10" fill="#0d1320" stroke="rgba(148,163,184,0.28)" />
+              <text x="232" y="218" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Order Books</text>
+              <text x="232" y="238" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10">L2 &amp; multi-outcome</text>
+
+              <rect x="404" y="190" width="182" height="68" rx="10" fill="#0d1c28" stroke="#22d3ee" stroke-width="1.5" />
+              <text x="418" y="218" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">C++ Feature Engine</text>
+              <text x="418" y="238" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10">Eliminates code drift</text>
+
+              <rect x="628" y="190" width="178" height="68" rx="10" fill="#0c1c1e" stroke="rgba(52,211,153,0.5)" />
+              <text x="642" y="218" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">In-Process ONNX</text>
+              <text x="642" y="238" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="10">Sub-ms scoring</text>
+
+              <rect x="844" y="190" width="176" height="68" rx="10" fill="#0c1d18" stroke="rgba(52,211,153,0.5)" />
+              <text x="858" y="218" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13" font-weight="700">Live Execution</text>
+              <text x="858" y="238" fill="#6ee7b7" font-family="JetBrains Mono, monospace" font-size="10">Backtest · Paper · Live</text>
+            </svg>
+          </div>
+
+          <div class="stage-caption">
+            <span><strong>No hidden sidecars required:</strong> feature computation, ONNX scoring, and risk checks run in-process.</span>
+            <a href="/architecture/" style="color: var(--cyan); font-weight: 600;">Deep-dive architecture →</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- Interactive Multi-Asset Switcher -->
+      <section>
+        <div class="sec-head">
+          <div class="sec-kicker">Multi-Asset &amp; Multi-Strategy</div>
+          <h2>One engine for every market and trading style</h2>
+          <p class="sec-desc">
+            Directional ML, high-frequency market making, digital options pricing, or cross-venue arbitrage—run
+            across crypto, prediction markets, equities, and sports or event venues.
+          </p>
+        </div>
+
+        <div class="asset-tabs" role="tablist" aria-label="Supported asset classes">
+          <button class="asset-tab" role="tab" aria-selected="true" tabindex="0" aria-controls="asset-poly" id="atab-poly">
+            Polymarket &amp; Prediction Markets
+          </button>
+          <button class="asset-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="asset-crypto" id="atab-crypto">
+            Crypto Spot &amp; Perpetuals
+          </button>
+          <button class="asset-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="asset-equities" id="atab-equities">
+            US Equities (IBKR)
+          </button>
+          <button class="asset-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="asset-sports" id="atab-sports">
+            Sports Betting &amp; Event Markets
+          </button>
+        </div>
+
+        <!-- Panel 1: Polymarket -->
+        <div class="asset-panel active" id="asset-poly" role="tabpanel" aria-labelledby="atab-poly">
+          <div class="asset-copy">
             <h3>Polymarket Digital Options Market Making</h3>
-            <p class="summary">
-              Cross-venue binary options pricer &amp; market-making pattern: price <code>P(S_T &gt; K)</code>
-              from a live Binance reference price and buy YES or NO on the Polymarket CLOB when edge exceeds threshold.
+            <p>
+              Native Polymarket CLOB WebSockets, EIP-712 bulk signing, multi-outcome order books, and
+              queue-notional backtesting. Price short-dated binary options from a live reference feed
+              (or plug in an ONNX probability model) and quote YES/NO directly on the CLOB.
             </p>
-            <ul class="spec-list">
-              <li><strong>Inputs</strong><span>Live Binance perp spot + Polymarket multi-outcome order book</span></li>
-              <li><strong>Pricing</strong><span>Analytical digital fair value (swap <code>fair_prob_yes()</code> with an ONNX probability model)</span></li>
-              <li><strong>Execution</strong><span>Native Polymarket CLOB limit orders with tick rounding and per-outcome inventory caps</span></li>
-            </ul>
-            <div class="example-links">
-              <a href="/strategies/#polymarket-digital-options">Read walkthrough →</a>
-              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp">View C++ source</a>
+            <div class="venue-pills">
+              <span class="vpill hi">Polymarket Native CLOB</span>
+              <span class="vpill">EIP-712 Bulk Sign</span>
+              <span class="vpill">Multi-Outcome Books</span>
+              <span class="vpill">Queue-Notional Backtest</span>
+            </div>
+            <a href="/strategies/#polymarket-digital-options" class="asset-link">Read the Polymarket digital options walkthrough →</a>
+          </div>
+          <div class="sim-card" aria-label="Polymarket digital options pricing example">
+            <div class="sim-head">
+              <span>polymarket_digital · CLOB</span>
+              <span class="sim-badge">● NATIVE SIGNING</span>
+            </div>
+            <div class="sim-body">
+              <div class="sim-row"><span>Contract</span><strong>BTC &gt; $100,000 (15m)</strong></div>
+              <div class="sim-row"><span>Ref Spot (Binance Perp)</span><strong class="cy">$100,420.50</strong></div>
+              <div class="sim-row"><span>Fair P(YES) / P(NO)</span><strong>0.640 / 0.360</strong></div>
+              <div class="sim-row"><span>CLOB Best Ask (YES)</span><strong>0.610</strong></div>
+              <div class="sim-row"><span>Edge vs. Ask</span><strong class="pos">+0.030 (+3.0¢)</strong></div>
+              <div class="sim-divider"></div>
+              <div class="sim-action">→ SUBMIT LIMIT BUY YES @ 0.61 · qty 10 · tick-rounded · cap OK</div>
             </div>
           </div>
+        </div>
 
-          <div class="example-card cyan-accent">
-            <div class="example-head">
-              <span class="pill">binance_onnx_perp</span>
-              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Crypto Perps · Predictive Model</span>
-            </div>
-            <h3>Binance Perpetuals ONNX Strategy</h3>
-            <p class="summary">
-              End-to-end predictive-model pattern: compute streaming order-flow features, score an ONNX model
-              in-process on tick arrival, and execute risk-checked entries and exits.
+        <!-- Panel 2: Crypto -->
+        <div class="asset-panel" id="asset-crypto" role="tabpanel" aria-labelledby="atab-crypto">
+          <div class="asset-copy">
+            <h3>Crypto Spot &amp; Perpetuals</h3>
+            <p>
+              Ingest full-exchange live feeds (10,000+ msg/s on a single ~$100 server), update streaming
+              order-flow features, and score ONNX models in-process. Execute natively on Hyperliquid and
+              Aster, or route Binance, Bybit, OKX, Gate.io, Bitget, and Coinbase via the bundled venue proxy.
             </p>
-            <ul class="spec-list">
-              <li><strong>Features</strong><span>Rolling taker buy/sell notional and trade-count windows</span></li>
-              <li><strong>Inference</strong><span>In-process ONNX Runtime scoring (LightGBM, XGBoost, or PyTorch)</span></li>
-              <li><strong>Execution</strong><span>Runs unchanged across backtests, paper trading, and live Binance via the bundled proxy</span></li>
-            </ul>
-            <div class="example-links">
-              <a href="/strategies/#binance-onnx-perp">Read walkthrough →</a>
-              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp">View C++ source</a>
+            <div class="venue-pills">
+              <span class="vpill hi">Hyperliquid (Native Rust)</span>
+              <span class="vpill hi">Aster (Native)</span>
+              <span class="vpill">Binance · Bybit · OKX</span>
+              <span class="vpill">Lighter L2</span>
+            </div>
+            <a href="/strategies/#binance-onnx-perp" class="asset-link">Read the Binance ONNX perpetuals walkthrough →</a>
+          </div>
+          <div class="sim-card" aria-label="Binance ONNX perpetuals example">
+            <div class="sim-head">
+              <span>binance_onnx_perp · SWAP</span>
+              <span class="sim-badge">● ONNX IN-PROCESS</span>
+            </div>
+            <div class="sim-body">
+              <div class="sim-row"><span>Symbol</span><strong>BTCUSDT (binance:swap)</strong></div>
+              <div class="sim-row"><span>Taker Buy Ratio (5s / 30s)</span><strong class="cy">0.78 / 0.64</strong></div>
+              <div class="sim-row"><span>ONNX Model Score</span><strong class="pos">0.712 (&gt; 0.65 enter)</strong></div>
+              <div class="sim-row"><span>Inference + Decision</span><strong class="am">&lt; 1 ms in-process</strong></div>
+              <div class="sim-divider"></div>
+              <div class="sim-action">→ SUBMIT MARKET BUY 0.01 BTCUSDT · PaperExchange / Proxy</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 3: Equities -->
+        <div class="asset-panel" id="asset-equities" role="tabpanel" aria-labelledby="atab-equities">
+          <div class="asset-copy">
+            <h3>US Equities via Interactive Brokers</h3>
+            <p>
+              The bundled Python venue proxy ships with a dedicated Interactive Brokers (IBKR) session
+              manager, US equity catalog, and order lifecycle routing—letting you run equity predictive
+              models and systematic execution on the exact same engine.
+            </p>
+            <div class="venue-pills">
+              <span class="vpill hi">IBKR TWS / Gateway</span>
+              <span class="vpill">US Equity Catalog</span>
+              <span class="vpill">Paper &amp; Live Routing</span>
+            </div>
+            <a href="/live-and-paper/" class="asset-link">Explore live &amp; proxy setup →</a>
+          </div>
+          <div class="sim-card" aria-label="IBKR equities routing example">
+            <div class="sim-head">
+              <span>ibkr · US EQUITIES</span>
+              <span class="sim-badge">● BUNDLED PROXY</span>
+            </div>
+            <div class="sim-body">
+              <div class="sim-row"><span>Gateway</span><strong>127.0.0.1:4002 (Paper) / 4001</strong></div>
+              <div class="sim-row"><span>Catalog</span><strong class="cy">Active + Delisted US Equities</strong></div>
+              <div class="sim-row"><span>Order Types</span><strong>LIMIT · MARKET · IOC · FOK</strong></div>
+              <div class="sim-row"><span>Risk Controls</span><strong>Exposure caps + rate limits</strong></div>
+              <div class="sim-divider"></div>
+              <div class="sim-action">→ Same C++ engine &amp; ONNX pipeline · zero broker boilerplate</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 4: Sports Betting & Event Markets -->
+        <div class="asset-panel" id="asset-sports" role="tabpanel" aria-labelledby="atab-sports">
+          <div class="asset-copy">
+            <h3>Sports Betting &amp; Custom Event Markets</h3>
+            <p>
+              Prediction markets and sportsbooks share the same math: binary or multi-outcome contracts
+              priced in probability space with fast odds updates. Plug in a custom odds feed or exchange
+              connector and reuse the full ONNX scoring, backtesting, and risk stack immediately.
+            </p>
+            <div class="venue-pills">
+              <span class="vpill hi">Multi-Outcome Contracts</span>
+              <span class="vpill">Probability Pricing</span>
+              <span class="vpill">Trivial Custom Feeds</span>
+            </div>
+            <a href="/architecture/" class="asset-link">See how modular streams &amp; tickers connect →</a>
+          </div>
+          <div class="sim-card" aria-label="Event market generalization example">
+            <div class="sim-head">
+              <span>event_market · OUTCOME BOOK</span>
+              <span class="sim-badge">● EXTENSIBLE</span>
+            </div>
+            <div class="sim-body">
+              <div class="sim-row"><span>Event</span><strong>Match / Binary Outcome</strong></div>
+              <div class="sim-row"><span>Live Model P(Home Win)</span><strong class="cy">0.585 (ONNX)</strong></div>
+              <div class="sim-row"><span>Exchange Best Implied</span><strong>0.540 (1.85 decimal)</strong></div>
+              <div class="sim-row"><span>Expected Edge</span><strong class="pos">+4.5%</strong></div>
+              <div class="sim-divider"></div>
+              <div class="sim-action">→ Reuse ONNX inference, inventory caps, and paper simulator</div>
             </div>
           </div>
         </div>
       </section>
 
+      <!-- Real Syntax-Highlighted Code -->
       <section>
-        <div class="sec-kicker">How It Works</div>
-        <h2>Offline training loop meets sub-ms live execution</h2>
-        <p class="sec-desc">
-          Train models in Python (LightGBM, XGBoost, PyTorch), export to <code>.onnx</code>, and serve them
-          with the exact same compiled C++ feature code that generated your training dataset.
-        </p>
-        <div class="diagram-shell">
-          <svg
-            viewBox="0 0 1060 320"
-            role="img"
-            aria-label="KeronisEngine workflow separating offline model training from sub-millisecond online execution while sharing the same C++ feature engine"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <defs>
-              <marker id="arrow-cyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#22d3ee" />
-              </marker>
-              <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#34d399" />
-              </marker>
-              <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#fbbf24" />
-              </marker>
-            </defs>
-
-            <text x="16" y="28" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">OFFLINE RESEARCH &amp; TRAINING</text>
-            <text x="16" y="188" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">ONLINE EXECUTION (SUB-MS IN-PROCESS)</text>
-
-            <rect x="404" y="38" width="206" height="264" rx="12" fill="rgba(34, 211, 238, 0.05)" stroke="rgba(34, 211, 238, 0.35)" stroke-dasharray="5 5" />
-            <text x="507" y="168" text-anchor="middle" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600">SAME C++ FEATURE CODE</text>
-
-            <!-- TOP ROW: Offline -->
-            <rect x="16" y="48" width="166" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="30" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Historical Parquet</text>
-            <text x="30" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">OHLCV · Trades · L2</text>
-
-            <line x1="182" y1="84" x2="210" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
-
-            <rect x="216" y="48" width="164" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="230" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Event Replay</text>
-            <text x="230" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Timestamp-ordered</text>
-
-            <line x1="380" y1="84" x2="412" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
-
-            <rect x="418" y="48" width="178" height="72" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
-            <text x="432" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Streaming Features</text>
-            <text x="432" y="96" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Emit training panels</text>
-
-            <line x1="596" y1="84" x2="628" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
-
-            <rect x="634" y="48" width="184" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="648" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Train in Python</text>
-            <text x="648" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">LightGBM · XGB · PyTorch</text>
-
-            <line x1="818" y1="84" x2="848" y2="84" stroke="#fbbf24" stroke-width="1.8" marker-end="url(#arrow-amber)" />
-
-            <rect x="854" y="48" width="190" height="72" rx="10" fill="#17140d" stroke="rgba(251, 191, 36, 0.5)" />
-            <text x="868" y="75" fill="#fde68a" font-family="Inter, sans-serif" font-size="13" font-weight="700">Export model.onnx</text>
-            <text x="868" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Versioned artifact</text>
-
-            <path d="M 949 120 L 949 154 L 726 154 L 726 202" fill="none" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#arrow-amber)" />
-
-            <!-- BOTTOM ROW: Online -->
-            <rect x="16" y="208" width="166" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="30" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Live Market Feeds</text>
-            <text x="30" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">WebSockets / Replay</text>
-            <text x="30" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Crypto · Polymarket · Eq</text>
-
-            <line x1="182" y1="247" x2="210" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
-
-            <rect x="216" y="208" width="164" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="230" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Order Books</text>
-            <text x="230" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">L2 &amp; multi-outcome</text>
-            <text x="230" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">In-memory state</text>
-
-            <line x1="380" y1="247" x2="412" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
-
-            <rect x="418" y="208" width="178" height="78" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
-            <text x="432" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Streaming Features</text>
-            <text x="432" y="256" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Real-time updates</text>
-            <text x="432" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">No feature-code drift</text>
-
-            <line x1="596" y1="247" x2="628" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
-
-            <rect x="634" y="208" width="184" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
-            <text x="648" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">ONNX Inference</text>
-            <text x="648" y="256" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="10.5">In-process scoring</text>
-            <text x="648" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Zero Python/IPC hops</text>
-
-            <line x1="818" y1="247" x2="848" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
-
-            <rect x="854" y="208" width="190" height="78" rx="10" fill="#0d1d18" stroke="rgba(52, 211, 153, 0.5)" />
-            <text x="868" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Risk &amp; Execution</text>
-            <text x="868" y="256" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="10.5">Backtest · Paper · Live</text>
-            <text x="868" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Direct + CCXT/IBKR proxy</text>
-          </svg>
+        <div class="sec-head">
+          <div class="sec-kicker">Compiled C++ Examples</div>
+          <h2>Write alpha once. Never fork the engine.</h2>
+          <p class="sec-desc">
+            Read the actual compiled code shipped in the repository. Keep your proprietary strategies and
+            features in a private directory and compile them straight into the binary.
+          </p>
         </div>
-      </section>
 
-      <section>
-        <div class="sec-kicker">Compiled C++ Code</div>
-        <h2>Read the actual strategy and feature code</h2>
-        <p class="sec-desc">
-          Keep your proprietary alpha in a private directory and compile it in without forking the engine.
-          Use click or Left/Right arrow keys to switch tabs.
-        </p>
         <div class="code-shell">
-          <div class="tablist" role="tablist" aria-label="Compiled C++ examples">
-            <button class="tab" role="tab" aria-selected="true" tabindex="0" aria-controls="panel-poly" id="tab-poly">
+          <div class="code-tablist" role="tablist" aria-label="Compiled C++ examples">
+            <button class="code-tab" role="tab" aria-selected="true" tabindex="0" aria-controls="cpanel-poly" id="ctab-poly">
               1. polymarket_digital.cpp
             </button>
-            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-binance" id="tab-binance">
+            <button class="code-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cpanel-binance" id="ctab-binance">
               2. binance_onnx_perp.cpp
             </button>
-            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-sm" id="tab-sm">
+            <button class="code-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cpanel-sm" id="ctab-sm">
               3. spread_sm.cpp
             </button>
           </div>
 
-          <pre class="tabpanel active" id="panel-poly" role="tabpanel" aria-labelledby="tab-poly"><code set:text={codePolymarketDigital}></code></pre>
+          <div class="code-panel active" id="cpanel-poly" role="tabpanel" aria-labelledby="ctab-poly">
+            <Code code={codePolymarketDigital} lang="cpp" />
+          </div>
 
-          <pre class="tabpanel" id="panel-binance" role="tabpanel" aria-labelledby="tab-binance"><code set:text={codeBinanceOnnx}></code></pre>
+          <div class="code-panel" id="cpanel-binance" role="tabpanel" aria-labelledby="ctab-binance">
+            <Code code={codeBinanceOnnx} lang="cpp" />
+          </div>
 
-          <pre class="tabpanel" id="panel-sm" role="tabpanel" aria-labelledby="tab-sm"><code set:text={codeSpreadSm}></code></pre>
+          <div class="code-panel" id="cpanel-sm" role="tabpanel" aria-labelledby="ctab-sm">
+            <Code code={codeSpreadSm} lang="cpp" />
+          </div>
 
           <div class="code-foot">
-            <span>Compile private strategies without forking: <code>-DKERONIS_STRATEGY_DIRS="/path/to/private"</code></span>
+            <span>Compile private alpha out-of-tree: <code>-DKERONIS_STRATEGY_DIRS="/path/to/private"</code></span>
             <a href="/strategies/#building-external-strategies">Out-of-tree build guide →</a>
           </div>
         </div>
       </section>
 
+      <!-- Full Stack Included -->
       <section>
-        <div class="sec-kicker">Why KeronisEngine</div>
-        <h2>Built for predictive models, not just rule-based scripts</h2>
-        <p class="sec-desc">
-          NautilusTrader is a strong general-purpose platform for Python strategies.
-          KeronisEngine is purpose-built when predictive models and sub-millisecond execution sit in the hot path.
-        </p>
-        <div class="diff-grid">
-          <div class="diff-card accent">
-            <h3>KeronisEngine</h3>
-            <ul>
-              <li><strong>Eliminates feature-code drift:</strong> The same compiled C++ feature code generates offline Parquet training sets and serves live inference.</li>
-              <li><strong>Sub-millisecond ONNX in-process:</strong> Score gradient boosters or neural nets directly on tick arrival without IPC or Python GIL overhead.</li>
-              <li><strong>Multi-asset &amp; prediction-market native:</strong> Trade crypto, Polymarket digital options, and US stocks (IBKR) out of the box—and extend cleanly to sports betting or new venues.</li>
-              <li><strong>Complete live stack included:</strong> Ships with the C++ engine, backtester, realistic paper venue, risk/staleness controls, and the Python CCXT/IBKR/venue proxy.</li>
-            </ul>
+        <div class="sec-head">
+          <div class="sec-kicker">Complete System</div>
+          <h2>Everything you need from research to live capital</h2>
+        </div>
+
+        <div class="stack-grid">
+          <div class="stack-card">
+            <div class="stack-tag">01 · RESEARCH &amp; BACKTEST</div>
+            <h3>Historical Features &amp; Replay</h3>
+            <p>Generate Parquet ML training sets and replay historical bars, trades, and order books (including Polymarket queue-notional fills) with the same compiled strategy code.</p>
           </div>
-          <div class="diff-card">
-            <h3>When to pick NautilusTrader or HftBacktest</h3>
-            <ul>
-              <li><strong>Pick NautilusTrader</strong> if you prefer writing strategies in Python and want a large ecosystem of Python-native broker adapters.</li>
-              <li><strong>Pick HftBacktest</strong> if your primary research depends on strict L3 order-queue-position simulation on CEX order books in Python/Numba.</li>
-              <li><strong>Deep internals:</strong> Want the low-level threading, book layout, and crash-recovery design? Read the <a href="/architecture/" style="color: var(--cyan); text-decoration: underline;">Architecture docs</a>.</li>
-            </ul>
+          <div class="stack-card">
+            <div class="stack-tag">02 · LIVE &amp; PAPER ENGINE</div>
+            <h3>Production Safety Built In</h3>
+            <p>Validate on live feeds with a realistic paper venue, then go live with durable quote pulls, staleness heartbeats, zero-downtime standby handoff, and HTTP introspection.</p>
+          </div>
+          <div class="stack-card">
+            <div class="stack-tag">03 · BUNDLED VENUE PROXY</div>
+            <h3>CCXT, IBKR &amp; Credentials Included</h3>
+            <p>Ships with <code>src/py/cpp_live_proxy</code> and <code>deploy/docker-compose.yml</code> (PostgreSQL + NATS + proxy) for Binance, Bybit, OKX, IBKR equities, and direct-signing credentials.</p>
           </div>
         </div>
       </section>
 
-      <section>
-        <div class="sec-kicker">What Ships Out of the Box</div>
-        <div class="scope-box">
-          <div>
-            <strong>Offline Research &amp; Simulation</strong>
-            <p>Historical feature generation, Parquet backtester (including Polymarket queue-notional fills), 260+ Catch2 unit tests, 2 flagship strategies, and 2 teaching feature templates.</p>
-          </div>
-          <div>
-            <strong>Live &amp; Paper Execution Stack</strong>
-            <p>C++20 live engine, dedicated-thread paper venue, PostgreSQL + NATS deployment (<code>deploy/docker-compose.yml</code>), and the bundled Python proxy (<code>src/py/cpp_live_proxy</code>) for CCXT exchanges, IBKR equities, Polymarket, Aster, and Hyperliquid.</p>
-          </div>
-          <div>
-            <strong>Platform &amp; License</strong>
-            <p>Linux and C++20 (CMake + Ninja + vcpkg + Rust Hyperliquid signer) plus Python 3.12 for the venue proxy. Apache-2.0 licensed, provided as-is without warranty.</p>
-          </div>
+      <!-- Closing CTA -->
+      <section class="cta-band">
+        <h2>Run the full stack locally in 5 minutes</h2>
+        <p>
+          Open-source under Apache-2.0. Build from source or pull the Docker image, run the 260+ unit tests
+          and quickstart backtest, and plug in your own strategies.
+        </p>
+        <div class="actions" style="margin-bottom: 0;">
+          <a href="/quickstart/" class="btn btn-primary">Quickstart Guide →</a>
+          <a href="/live-and-paper/" class="btn btn-secondary">Live &amp; Proxy Stack</a>
+          <a href="https://github.com/JNeuvonen/keronisengine" class="btn btn-secondary">Star on GitHub</a>
         </div>
       </section>
     </main>
@@ -1119,14 +1566,15 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <a href="/strategies/">Strategies</a>
           <a href="/live-and-paper/">Live &amp; Proxy</a>
           <a href="/architecture/">Architecture</a>
+          <a href="/comparison/">Comparison</a>
           <a href="/llms.txt">llms.txt</a>
           <a href="/llms-full.txt">llms-full.txt</a>
-          <a href="https://github.com/JNeuvonen/keronisengine">GitHub</a>
         </div>
       </div>
     </footer>
 
     <script>
+      // Copy Docker command
       const copyBtn = document.getElementById('copy-cmd');
       const cmdEl = document.getElementById('docker-cmd');
       copyBtn?.addEventListener('click', async () => {
@@ -1137,39 +1585,52 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         } catch {}
       });
 
-      const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
-      const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
+      // Pause / Play architecture animation (WCAG 2.2.2)
+      const stage = document.getElementById('arch-stage');
+      const toggleAnim = document.getElementById('toggle-anim');
+      toggleAnim?.addEventListener('click', () => {
+        const paused = stage?.classList.toggle('is-paused');
+        toggleAnim.textContent = paused ? 'Play animation' : 'Pause animation';
+      });
 
-      function activateTab(nextTab, shouldFocus = false) {
-        tabs.forEach((t) => {
-          const selected = t === nextTab;
-          t.setAttribute('aria-selected', selected ? 'true' : 'false');
-          t.setAttribute('tabindex', selected ? '0' : '-1');
+      // Reusable accessible keyboard-navigable tablist binder
+      function bindTablist(tabSelector, panelSelector) {
+        const tabs = Array.from(document.querySelectorAll(tabSelector));
+        const panels = Array.from(document.querySelectorAll(panelSelector));
+        function activate(nextTab, focus = false) {
+          tabs.forEach((t) => {
+            const on = t === nextTab;
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+            t.setAttribute('tabindex', on ? '0' : '-1');
+          });
+          panels.forEach((p) => p.classList.remove('active'));
+          const target = document.getElementById(nextTab.getAttribute('aria-controls') || '');
+          target?.classList.add('active');
+          if (focus) nextTab.focus();
+        }
+        tabs.forEach((tab, idx) => {
+          tab.addEventListener('click', () => activate(tab));
+          tab.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight') {
+              e.preventDefault();
+              activate(tabs[(idx + 1) % tabs.length], true);
+            } else if (e.key === 'ArrowLeft') {
+              e.preventDefault();
+              activate(tabs[(idx - 1 + tabs.length) % tabs.length], true);
+            } else if (e.key === 'Home') {
+              e.preventDefault();
+              activate(tabs[0], true);
+            } else if (e.key === 'End') {
+              e.preventDefault();
+              activate(tabs[tabs.length - 1], true);
+            }
+          });
         });
-        panels.forEach((p) => p.classList.remove('active'));
-        const target = document.getElementById(nextTab.getAttribute('aria-controls') || '');
-        target?.classList.add('active');
-        if (shouldFocus) nextTab.focus();
       }
 
-      tabs.forEach((tab, idx) => {
-        tab.addEventListener('click', () => activateTab(tab));
-        tab.addEventListener('keydown', (e) => {
-          if (e.key === 'ArrowRight') {
-            e.preventDefault();
-            activateTab(tabs[(idx + 1) % tabs.length], true);
-          } else if (e.key === 'ArrowLeft') {
-            e.preventDefault();
-            activateTab(tabs[(idx - 1 + tabs.length) % tabs.length], true);
-          } else if (e.key === 'Home') {
-            e.preventDefault();
-            activateTab(tabs[0], true);
-          } else if (e.key === 'End') {
-            e.preventDefault();
-            activateTab(tabs[tabs.length - 1], true);
-          }
-        });
-      });
+      bindTablist('.seg-tab', '.stage-view');
+      bindTablist('.asset-tab', '.asset-panel');
+      bindTablist('.code-tab', '.code-panel');
     </script>
   </body>
 </html>
