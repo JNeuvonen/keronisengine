@@ -24,9 +24,12 @@ Documentation: [engine.keronis.ai](https://engine.keronis.ai/) (plain Markdown b
 
 ## Architecture notes
 
+The codebase is split into independent modules (`market_data`, `trading_engine`, `live_infra`, `backtest_runner`, `historical_feature_gen`, `engine_control_server`). `trading_engine` has no dependency on live sockets, PostgreSQL, or NATS; `LiveTradeTicker` (live) and `BacktestTradeTicker` (offline) are the execution seam.
+
+- **Live runtime (`Live::StateUpdater`):** Owns `MarketDataStreamManager`, drains live market events through a lock-free `BlockingConcurrentQueue`, runs `AccountStreamManager` + REST reconciliation, hot-syncs strategy rows from PostgreSQL by fingerprint, persists state to disk, and coordinates cron standby handoffs via `/tmp/live_infra_state_lock` and SQLite heartbeats.
 - **Order book (`RingBufferBook`):** Fixed tick-indexed flat array with 16-byte POD slots (`tick_tag`, `updated_sec`, `qty`), occupancy bitmap with `__builtin_ctzll` empty-word skipping, lazy OS page commitment, and runtime window sizing (19-bit for CEX books, 10-bit for Polymarket). Single-threaded `apply_bid` runs at ~1.5 ns/op on an Intel Core Ultra 9 285K with `-O3 -fno-fast-math -ffp-contract=off -frounding-math`.
-- **Feature parity:** C++ `StrategyStateMachine` implementations (7 included, such as `six_venue_order` and `global_bba`) run offline in `historical_feature_gen` and online in `backtest_runner` / `live_infra`, feeding ONNX Runtime directly.
-- **Execution simulation:** `BacktestState` replays Parquet events with configurable latency, fees, and Polymarket queue-position notional (`order_queue_notional_accumulated`). `PaperExchange` evaluates paper orders as taker at `ack + latency`, then fills any resting remainder as maker against quotes and subsequent prints; cancels stop later prints from filling.
+- **Feature parity:** C++ `StrategyStateMachine` implementations (7 included, such as `six_venue_order` and `global_bba`) run offline in `historical_feature_gen` and online via `StateMachineDispatcher` + `SMSyncer`, feeding ONNX Runtime directly.
+- **Execution simulation:** `BacktestState` replays Parquet events offline with configurable latency, fees, and Polymarket queue-position notional (`order_queue_notional_accumulated`). `PaperExchange` runs on its own thread inside `live_infra`, evaluating paper orders as taker at `ack + latency` and filling any resting remainder as maker against quotes and subsequent prints.
 - **Live safety:** `QuoteHolds` persists quote-pull state across restarts and pulls resting entry quotes if the `quote_guard` heartbeat in `engine_health` goes stale (`IS_PROD=1`) or on `SIGTERM`.
 - **Numerics:** Order quantities, fees, and PnL use a clean-room Apache-2.0 `mpreal` wrapper over dynamically linked MPFR/GMP.
 

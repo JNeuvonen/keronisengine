@@ -1,35 +1,17 @@
 # KeronisEngine
 
-KeronisEngine is an open-source C++20 trading engine with streaming feature state machines and in-process ONNX Runtime inference.
+KeronisEngine is an open-source C++20 trading engine composed of independent modules: a market-data and streaming feature layer (`market_data`), a venue-agnostic order/risk/book core (`trading_engine`), a live runtime orchestrator (`live_infra`), an offline event-driven backtester (`backtest_runner`), and an offline feature generator (`historical_feature_gen`).
 
-The same strategy functions and state machines run in offline feature generation (`historical_feature_gen`), historical event replay (`backtest_runner`), paper trading (`PaperExchange`), and live trading (`live_infra`). It is designed to ingest full-exchange crypto feeds (10,000+ messages/sec across Binance) while updating order books, computing features, and running ONNX inference on a single ~$100 dedicated server.
+The same strategy functions and C++ `StrategyStateMachine` classes run in offline training-set generation, historical replay, paper trading (`PaperExchange`), and live trading. In production it ingests full-exchange crypto feeds (10,000+ messages/sec across Binance) while updating order books, computing streaming features, and scoring ONNX models on a single ~$100 dedicated server.
 
-## Architecture overview
+## How the modules fit together
 
-```mermaid
-flowchart LR
-    MD["Market Data<br/>Parquet / Live WS"] --> BOOK["RingBufferBook<br/>16B slots, bitmap + ctzll"]
-    MD --> SM["StrategyStateMachine<br/>KERONIS_REGISTER_STATE_MACHINE"]
-    SM --> ONNX["ONNX Runtime"]
-    BOOK --> ENG["Core::Engine<br/>Inventory, Risk, QuoteHolds"]
-    ONNX --> STRAT["Strategies<br/>KERONIS_REGISTER_STRATEGY"]
-    ENG --> STRAT
-    STRAT --> BT["BacktestState"]
-    STRAT --> PAPER["PaperExchange"]
-    STRAT --> LIVE["Live Venues"]
-```
+- **`market_data`** manages WebSocket feeds (`MarketDataStreamManager`), in-memory/Parquet `OhlcvDataset`s (`DatasetsManager`), and `StateMachineDispatcher` + `SMSyncer` for streaming features. It has no dependency on orders, accounts, or execution.
+- **`trading_engine`** holds `Core::Engine`, `Core::Strategy`, `Core::TradeTicker`, `RingBufferBook`, risk/rate limits, and `BacktestState`. It does not touch live sockets, PostgreSQL, or NATS.
+- **`live_infra`** (`Live::StateUpdater`) wires `market_data` into `Core::Engine` through a lock-free `BlockingConcurrentQueue`, routes `LiveTradeTicker` orders to native signers (Hyperliquid Rust signer, Aster, Polymarket), `PaperExchange`, or an external proxy, reconciles fills/inventory via `AccountStreamManager` and REST, hot-syncs strategy configs from PostgreSQL, and handles disk crash recovery and standby process handoffs.
+- **`backtest_runner`** and **`historical_feature_gen`** run standalone against partitioned Parquet files under `DATA_DIR_ROOT`, with no database or network dependencies.
 
-## Packages
-
-| Package | Responsibility |
-|---|---|
-| `trading_engine` | `Core::Engine`, `Core::Strategy`, `Core::TradeTicker`, `RingBufferBook`, risk checks, `BacktestState` |
-| `market_data` | Parquet OHLCV/trade readers, `LighterOrderBook`, `DepthHistory`, `StrategyStateMachine`, `StateMachineDispatcher` |
-| `live_infra` | Live runtime (`live_infra`), `PaperExchange`, `QuoteHolds`, native clients for Hyperliquid, Aster, and Polymarket |
-| `backtest_runner` | CLI runner that replays Parquet datasets from a `config.json` and writes `summary.json`, `trades.json`, `equity_curve.json` |
-| `historical_feature_gen` | Runs registered state machines over historical Parquet data to emit training sets |
-| `engine_control_server` | Embedded localhost HTTP server for inspecting live engine state |
-| `strategies/` | Reference strategies: `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
+See [Architecture](architecture.md) for the full live runtime and offline pipeline diagrams.
 
 ## Supported venues
 
@@ -41,13 +23,15 @@ flowchart LR
 | Lighter | Native REST + L2 WS | `PaperExchange` | Nonce-checked `LighterOrderBook` and `DepthHistory` |
 | Binance, Bybit, others | Native / Parquet | External proxy (`CCXT_PROXY_BASE_URL`) | External proxy is not included in this repo |
 
-## Where to start
+## Documentation
 
-- [Quickstart](quickstart.md): build from source (or Docker), run unit tests, and run the `sma_crossover` backtest.
-- [Architecture](architecture.md): `RingBufferBook` memory layout, `BacktestState` vs `PaperExchange` fill models, and numeric determinism.
-- [Strategies](strategies.md): writing and registering external strategies with `-DKERONIS_STRATEGY_DIRS`.
-- [State Machines & ONNX](state-machines.md): implementing `StrategyStateMachine` and running ONNX inference.
+- [Quickstart](quickstart.md): build from source (or Docker), run tests, and run the `sma_crossover` backtest.
+- [Architecture](architecture.md): module boundaries, `live_infra` threading and handoff model, offline replay pipeline, and `RingBufferBook` internals.
+- [Strategies](strategies.md): registering external strategies with `KERONIS_REGISTER_STRATEGY` and `-DKERONIS_STRATEGY_DIRS`.
+- [State Machines & ONNX](state-machines.md): implementing `StrategyStateMachine` and running ONNX Runtime inference.
 - [Live & Paper Trading](live-and-paper.md): PostgreSQL + NATS setup, `schema.sql`, `PaperExchange`, and `QuoteHolds`.
+- [Control Server API](control-server.md): localhost HTTP inspection endpoints.
+- [Configuration](configuration.md): environment variables and backtest `config.json`.
 - [Comparison](comparison.md): tradeoffs against NautilusTrader and HftBacktest.
 
 Plain Markdown documentation for scripts and agents is available at [`/llms.txt`](https://engine.keronis.ai/llms.txt) and [`/llms-full.txt`](https://engine.keronis.ai/llms-full.txt).
