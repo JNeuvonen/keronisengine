@@ -295,7 +295,7 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
       <span class="ep-latency-val">&lt; 1 ms</span>
       <span class="ep-latency-path">end-to-end · tick → features → inference → order</span>
     </div>
-    <span class="ep-latency-note">Strategies read OHLCV bars, Feature SMs, or both asynchronously</span>
+    <span class="ep-latency-note">Single C++20 process · zero IPC · lock-free handoff</span>
   </div>
 
   <!-- Quiet, low-chrome data & source inspector with clickable GitHub links -->
