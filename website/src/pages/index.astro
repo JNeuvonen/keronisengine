@@ -1182,14 +1182,14 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
       </section>
 
-      <!-- Step-by-Step Interactive Trace -->
+      <!-- Step-by-Step Thread Model & Execution Trace -->
       <section class="band">
         <div class="sec-head">
-          <div class="kicker">Step-by-Step Execution Trace</div>
-          <h2>Follow one tick from wire event to order</h2>
+          <div class="kicker">Thread Model</div>
+          <h2>How a tick crosses threads, queues, and atomics</h2>
           <p class="sec-desc">
-            Step through how a raw market event updates streaming C++ features, scores an ONNX model
-            in-process, clears risk gates, and dispatches across the execution seam.
+            Five concurrent thread lanes decoupled by lock-free queues and atomics—so socket reads,
+            feature updates, ONNX scoring, and order execution never block each other.
           </p>
         </div>
 

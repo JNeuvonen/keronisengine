@@ -1,504 +1,485 @@
 ---
 const steps = [
   {
-    num: '01',
-    short: 'TradeEvent',
-    title: 'Raw trade event arrives',
-    symbol: 'MarketData::TradeEvent',
-    desc: 'A live WebSocket frame (or timestamp-ordered Parquet record in backtests) is parsed into a normalized TradeEvent and pushed onto the lock-free event queue. OHLCV bars and L2 deltas follow the exact same dispatch path.',
-    note: 'Same MarketEvent struct across live WS, PaperExchange, and backtest_runner.',
-    payloadTitle: 'INBOUND · MarketEvent::TRADE',
-    payloadBadge: 'WIRE / PARQUET',
-    lines: [
-      { k: 'type', v: '"TRADE"', cls: 'str' },
-      { k: 'symbol_key', v: '"BTCUSDT:binance:swap"', cls: 'acc' },
-      { k: 'price', v: '100420.50', cls: 'num' },
-      { k: 'qty', v: '1.85', cls: 'num' },
-      { k: 'is_buyer_maker', v: 'false  // aggressive taker buy', cls: 'sig' },
-      { k: 'timestamp_ms', v: '1732632012418', cls: 'num' },
+    idx: 0,
+    lane: 0,
+    thread: 'MarketDataStreams (WS I/O thread)',
+    sync: 'Lock-free enqueue → live_event_queue_',
+    title: '1. Parse wire frame & enqueue without blocking I/O',
+    desc: 'The venue WebSocket thread parses the incoming frame into a normalized MarketData::MarketEvent and pushes it onto StateUpdater::live_event_queue_ (moodycamel::BlockingConcurrentQueue). Socket reads never wait on order books, feature math, or model inference.',
+    trace: [
+      '// state_updater.cpp:936',
+      'MarketEvent ev = parse_trade_frame(raw_ws);',
+      '// symbol_key="BTCUSDT:binance:swap" px=100420.50 qty=1.85',
+      'live_event_queue_.enqueue(std::move(ev));',
     ],
   },
   {
-    num: '02',
-    short: 'Feature SM',
-    title: 'Streaming feature state updates in C++',
-    symbol: 'WindowedTakerFlowSM::react_impl()',
-    desc: 'StateMachineDispatcher routes the event to the registered C++ state machine. Stale 1-second ring buckets expire automatically, the buy notional ($185,778) is accumulated, and emit_state() returns a contiguous float vector.',
-    note: 'Exact same compiled C++ class emits offline Parquet training panels.',
-    payloadTitle: 'STATE · emit_state() -> vector<float>',
-    payloadBadge: 'TRAIN/SERVE PARITY',
-    lines: [
-      { k: 'state_machine', v: '"windowed_taker_flow"', cls: 'str' },
-      { k: 'buy_ratio_5s', v: '0.780f', cls: 'sig' },
-      { k: 'trade_count_5s', v: '14.0f', cls: 'num' },
-      { k: 'buy_volume_5s', v: '185778.0f', cls: 'num' },
-      { k: 'sell_volume_5s', v: '52400.0f', cls: 'num' },
-      { k: 'vol_ratio_5s_vs_30s', v: '0.412f', cls: 'acc' },
+    idx: 1,
+    lane: 1,
+    thread: 'StateUpdater::live_event_consumer_loop',
+    sync: 'wait_dequeue_timed → book update + lock-free fan-out',
+    title: '2. Update order books & fan out to StateMachineDispatcher',
+    desc: 'A dedicated consumer thread drains live_event_queue_, updates RingBufferBook / BBA / spot prices inside Core::Engine, and fans out the event to StateMachineDispatcher::queue_ (and to PaperExchange on paper strategies).',
+    trace: [
+      '// state_updater.cpp:4070, 4221',
+      'live_event_queue_.wait_dequeue_timed(ev, ...);',
+      'engine.update_price_and_book(ev);',
+      'StateMachineDispatcher::get_instance().enqueue(ev);',
     ],
   },
   {
-    num: '03',
-    short: 'ONNX Runtime',
-    title: 'In-process ONNX inference scores the vector',
-    symbol: 'OnnxModel::predict(*features)',
-    desc: 'compute_predictions_callback passes the float vector straight into an in-process ONNX Runtime C++ session—no JSON serialization, no localhost HTTP hop, and no Python GIL. The scalar prediction is stored lock-free on the ticker.',
-    note: 'Works with any ONNX-exportable model and extends cleanly to custom C++ runtimes.',
-    payloadTitle: 'INFERENCE · AtomicSignal',
-    payloadBadge: 'IN-PROCESS ONNX',
-    lines: [
-      { k: 'artifact', v: '"taker_flow_v1.onnx"', cls: 'art' },
-      { k: 'input_tensor', v: 'float[1, 5]', cls: 'acc' },
-      { k: 'predicted_score', v: '0.712f', cls: 'sig' },
-      { k: 'enter_threshold', v: '0.650f  // triggered', cls: 'sig' },
-      { k: 'atomic_signal_main', v: 'store(0.712f, 1732632012418)', cls: 'num' },
+    idx: 2,
+    lane: 2,
+    thread: 'StateMachineDispatcher::consumer_loop',
+    sync: 'Dedicated SM thread · shared offline/live C++ class',
+    title: '3. Update streaming features in compiled C++',
+    desc: 'The state-machine thread drains its own lock-free queue and calls sm->react(ev) on every registered StrategyStateMachine. Shared C++ code between offline Parquet feature generation and live trading—never blocks WebSocket I/O or order routing.',
+    trace: [
+      '// state_machine_dispatcher.cpp:64 -> windowed_taker_flow_sm.cpp',
+      'sm->react(ev);  // expires stale 1s buckets, accumulates notional',
+      '// emit_state() -> [0.780f, 14.0f, 185778.0f, 52400.0f, 0.412f]',
     ],
   },
   {
-    num: '04',
-    short: 'Strategy & Risk',
-    title: 'Strategy callback evaluates & passes risk gates',
-    symbol: 'Core::TradeTicker::construct_order()',
-    desc: 'on_market_event locks ticker->trading_mutex, reads atomic_signal_main.load(), confirms no resting orders or open trade exist, and calls submit_market_order. construct_order enforces exposure caps, rate limits, and quote-hold state.',
-    note: 'Every order passes identical risk checks in backtest, paper, and live.',
-    payloadTitle: 'RISK GATE · construct_order()',
-    payloadBadge: 'VALIDATED',
-    lines: [
-      { k: 'trading_mutex', v: 'LOCKED', cls: 'acc' },
-      { k: 'open_orders / trades', v: '0 / 0', cls: 'num' },
-      { k: 'quotes_pulled', v: 'false', cls: 'sig' },
-      { k: 'exposure_cap_check', v: 'PASS', cls: 'sig' },
-      { k: 'order_rate_limit', v: 'PASS', cls: 'sig' },
-      { k: 'construction_result', v: 'OrderConstructionResult::VALID', cls: 'sig' },
+    idx: 3,
+    lane: 3,
+    thread: 'Core::Engine::generate_predictions_thread_pool',
+    sync: 'Worker pool (hardware_concurrency) → atomic store',
+    title: '4. Score ONNX model in-process & publish lock-free signal',
+    desc: 'generate_predictions_loop dispatches compute_predictions_callback across worker threads. The callback reads sm->emit_state(), runs OnnxModel::predict(*features) in-process, and writes the score lock-free to ticker->atomic_signal_main.',
+    trace: [
+      '// engine.cpp:130, 728 -> binance_onnx_perp.cpp:34',
+      'auto features = sm->emit_state();',
+      'float score = model->predict(*features);  // 0.712f (in-process)',
+      'ticker->atomic_signal_main.store(score, now_ms);',
     ],
   },
   {
-    num: '05',
-    short: 'Order Out',
-    title: 'Order dispatches across the execution seam',
-    symbol: 'Core::TradeTicker -> Venue Backend',
-    desc: 'The validated Core::Order is handed to whichever TradeTicker implementation is active: BacktestState for historical replay, PaperExchange for live depth-based simulation, a native C++ signer (Polymarket, Hyperliquid, Aster), or the bundled CCXT/IBKR proxy.',
-    note: 'Total tick -> features -> inference -> order decision completes in <1 ms.',
-    payloadTitle: 'OUTBOUND · Core::Order',
-    payloadBadge: '<1 MS HOT PATH',
-    lines: [
-      { k: 'symbol', v: '"BTCUSDT"', cls: 'str' },
-      { k: 'side / type', v: 'BUY / MARKET', cls: 'sig' },
-      { k: 'quantity (mpreal)', v: '"0.01"', cls: 'num' },
-      { k: 'reference_price', v: '100420.50', cls: 'num' },
-      { k: 'execution_target', v: '"Backtest | PaperExchange | Live"', cls: 'acc' },
-      { k: 'status', v: 'SUBMITTED', cls: 'sig' },
+    idx: 4,
+    lane: 4,
+    thread: 'Core::Engine::strategy_thread_pool',
+    sync: 'std::lock_guard<std::mutex>(ticker->trading_mutex)',
+    title: '5. Evaluate strategy & enforce risk gates',
+    desc: 'generate_strategy_decisions_loop dispatches strategy_callback across worker threads. The strategy locks ticker->trading_mutex, reads atomic_signal_main.load() + current book, and constructs an order through construct_order() (exposure caps, rate limits, quote holds).',
+    trace: [
+      '// engine.cpp:134, 871 -> binance_onnx_perp.cpp:57',
+      'std::lock_guard lock(ticker->trading_mutex);',
+      'auto [score, ts] = ticker->atomic_signal_main.load(); // 0.712f > 0.65f',
+      'auto [res, ord] = ticker->construct_order(engine, strategy, params); // VALID',
+    ],
+  },
+  {
+    idx: 5,
+    lane: 4,
+    thread: 'Core::TradeTicker execution seam',
+    sync: 'Direct signer · cpp_live_proxy · PaperExchange · BacktestState',
+    title: '6. Dispatch validated order to venue backend',
+    desc: 'The constructed Core::Order crosses the TradeTicker seam to the active execution backend: native C++ direct signers (Polymarket EIP-712, Hyperliquid Rust, Aster), bundled cpp_live_proxy (CCXT / IBKR), PaperExchange thread, or BacktestState offline.',
+    trace: [
+      '// Core::TradeTicker -> LiveTradeTicker / BacktestTradeTicker',
+      'Order { symbol="BTCUSDT", side=BUY, type=MARKET, qty=0.01 }',
+      'dispatch(order);  // tick -> features -> ONNX -> order in <1 ms',
     ],
   },
 ];
 ---
 
-<div class="stepper" id="tick-stepper" data-step="0">
-  <div class="stepper-bar">
-    <div class="stepper-title">
-      <span class="stepper-tag">INTERACTIVE TRACE</span>
-      <span class="stepper-counter" id="stepper-counter">Step 1 / 5</span>
+<div class="tm" id="thread-model" data-step="0">
+  <div class="tm-bar">
+    <div class="tm-meta">
+      <span class="tm-label">CONCURRENCY &amp; THREAD MODEL</span>
+      <span class="tm-count" id="tm-count">Step 1 / 6</span>
     </div>
-    <div class="stepper-controls">
-      <button type="button" class="ctrl-btn" id="step-prev" aria-label="Previous step">← Prev</button>
-      <button type="button" class="ctrl-btn" id="step-next" aria-label="Next step">Next →</button>
-      <button type="button" class="ctrl-btn ctrl-play" id="step-play">Auto-play</button>
+    <div class="tm-controls">
+      <button type="button" class="tm-btn" id="tm-prev" aria-label="Previous step">← Prev</button>
+      <button type="button" class="tm-btn" id="tm-next" aria-label="Next step">Next →</button>
+      <button type="button" class="tm-btn" id="tm-play">Play</button>
     </div>
   </div>
 
-  <!-- 5-Node Interactive Pipeline Track -->
-  <div class="track" role="tablist" aria-label="Tick to order pipeline steps">
-    {steps.map((s, idx) => (
-      <>
-        <button
-          type="button"
-          class={`node ${idx === 0 ? 'is-active' : ''}`}
-          role="tab"
-          aria-selected={idx === 0 ? 'true' : 'false'}
-          tabindex={idx === 0 ? '0' : '-1'}
-          data-index={idx}
-          id={`step-tab-${idx}`}
-          aria-controls={`step-panel-${idx}`}
-        >
-          <span class="node-num">{s.num}</span>
-          <span class="node-name">{s.short}</span>
-        </button>
-        {idx < steps.length - 1 && (
-          <div class="rail" data-rail={idx} aria-hidden="true">
-            <div class="rail-fill"></div>
+  <!-- 2D Thread-Swimlane Diagram -->
+  <div class="tm-canvas">
+    <svg viewBox="0 0 1000 356" role="img" aria-label="2D thread swimlane diagram showing how a market tick moves across WebSocket I/O, live_event_consumer_loop, StateMachineDispatcher, predictions thread pool, and strategy thread pool via lock-free queues and atomics" xmlns="http://www.w3.org/2000/svg">
+      <!-- Swimlane backgrounds (5 OS thread lanes) -->
+      <rect class="lane-bg" data-lane="0" x="0" y="16" width="1000" height="64" fill="transparent" />
+      <rect class="lane-bg" data-lane="1" x="0" y="80" width="1000" height="64" fill="transparent" />
+      <rect class="lane-bg" data-lane="2" x="0" y="144" width="1000" height="64" fill="transparent" />
+      <rect class="lane-bg" data-lane="3" x="0" y="208" width="1000" height="64" fill="transparent" />
+      <rect class="lane-bg" data-lane="4" x="0" y="272" width="1000" height="68" fill="transparent" />
+
+      <!-- Horizontal lane dividers -->
+      <line x1="0" y1="16" x2="1000" y2="16" stroke="#1e242e" stroke-width="1" />
+      <line x1="0" y1="80" x2="1000" y2="80" stroke="#1e242e" stroke-width="1" />
+      <line x1="0" y1="144" x2="1000" y2="144" stroke="#1e242e" stroke-width="1" />
+      <line x1="0" y1="208" x2="1000" y2="208" stroke="#1e242e" stroke-width="1" />
+      <line x1="0" y1="272" x2="1000" y2="272" stroke="#1e242e" stroke-width="1" />
+      <line x1="0" y1="340" x2="1000" y2="340" stroke="#1e242e" stroke-width="1" />
+
+      <!-- Left thread-gutter divider -->
+      <line x1="224" y1="16" x2="224" y2="340" stroke="#28303d" stroke-width="1" />
+
+      <!-- Left gutter: OS Thread names -->
+      <text x="16" y="44" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T1 · WS I/O Thread(s)</text>
+      <text x="16" y="61" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">MarketDataStreams</text>
+
+      <text x="16" y="108" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T2 · live_event_consumer</text>
+      <text x="16" y="125" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Live::StateUpdater</text>
+
+      <text x="16" y="172" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T3 · SM consumer_loop</text>
+      <text x="16" y="189" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">StateMachineDispatcher</text>
+
+      <text x="16" y="236" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T4 · predictions_pool</text>
+      <text x="16" y="253" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Core::Engine (ONNX)</text>
+
+      <text x="16" y="302" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T5 · strategy_pool</text>
+      <text x="16" y="319" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Core::Engine → Venue</text>
+
+      <!-- Connectors between steps (explicit queues & atomics) -->
+      <!-- Edge 0->1: T1 -> live_event_queue_ -> T2 -->
+      <path class="edge" data-edge="0" d="M 390 48 L 414 48 L 414 112 L 434 112" fill="none" stroke="#2d3646" stroke-width="1.5" />
+      <rect x="358" y="70" width="112" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
+      <text x="414" y="83" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">live_event_queue_</text>
+
+      <!-- Edge 1->2: T2 -> sm_queue_ -> T3 -->
+      <path class="edge" data-edge="1" d="M 594 112 L 614 112 L 614 176 L 520 176" fill="none" stroke="#2d3646" stroke-width="1.5" />
+      <rect x="562" y="134" width="104" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
+      <text x="614" y="147" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">sm_queue_ (MPSC)</text>
+
+      <!-- Edge 2->3: T3 -> emit_state() -> T4 -->
+      <path class="edge" data-edge="2" d="M 520 176 L 552 176 L 552 240 L 584 240" fill="none" stroke="#2d3646" stroke-width="1.5" />
+      <rect x="506" y="198" width="92" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
+      <text x="552" y="211" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">emit_state()</text>
+
+      <!-- Edge 3->4: T4 -> atomic_signal_main -> T5 -->
+      <path class="edge" data-edge="3" d="M 744 240 L 764 240 L 764 306 L 744 306" fill="none" stroke="#2d3646" stroke-width="1.5" />
+      <rect x="704" y="262" width="120" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
+      <text x="764" y="275" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">atomic_signal_main</text>
+
+      <!-- Edge 4->5: T5 -> Execution Seam -->
+      <path class="edge" data-edge="4" d="M 744 306 L 832 306" fill="none" stroke="#2d3646" stroke-width="1.5" />
+
+      <!-- Clickable Step Nodes -->
+      <!-- Step 0 (Lane 0) -->
+      <g class="snode" data-step-node="0" role="button" tabindex="0" aria-label="Step 1: Parse wire frame and enqueue">
+        <rect x="242" y="28" width="148" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="254" y="45" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">01 · Parse WS</text>
+        <text x="254" y="59" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">MarketEvent::TRADE</text>
+      </g>
+
+      <!-- Step 1 (Lane 1) -->
+      <g class="snode" data-step-node="1" role="button" tabindex="0" aria-label="Step 2: Update order book and fan out">
+        <rect x="434" y="92" width="160" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="446" y="109" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">02 · Book &amp; Fan-out</text>
+        <text x="446" y="123" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">RingBufferBook + BBA</text>
+      </g>
+
+      <!-- Step 2 (Lane 2) -->
+      <g class="snode" data-step-node="2" role="button" tabindex="0" aria-label="Step 3: Streaming feature state machine update">
+        <rect x="348" y="156" width="172" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="360" y="173" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">03 · SM::react()</text>
+        <text x="360" y="187" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">Shared offline/live C++</text>
+      </g>
+
+      <!-- Step 3 (Lane 3) -->
+      <g class="snode" data-step-node="3" role="button" tabindex="0" aria-label="Step 4: In-process ONNX inference">
+        <rect x="584" y="220" width="160" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="596" y="237" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">04 · ONNX::predict</text>
+        <text x="596" y="251" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">In-process C++ session</text>
+      </g>
+
+      <!-- Step 4 (Lane 4, left) -->
+      <g class="snode" data-step-node="4" role="button" tabindex="0" aria-label="Step 5: Strategy decision and risk gate">
+        <rect x="564" y="286" width="180" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="576" y="303" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">05 · Strategy &amp; Risk</text>
+        <text x="576" y="317" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">trading_mutex · construct</text>
+      </g>
+
+      <!-- Step 5 (Lane 4, right) -->
+      <g class="snode" data-step-node="5" role="button" tabindex="0" aria-label="Step 6: Execution seam dispatch">
+        <rect x="832" y="286" width="152" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
+        <text x="844" y="303" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">06 · Dispatch Order</text>
+        <text x="844" y="317" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">Sign · Proxy · Paper</text>
+      </g>
+
+      <!-- Moving packet marker (positioned via JS transform on step change) -->
+      <circle id="tm-packet" cx="316" cy="48" r="5" fill="#d4a359" />
+    </svg>
+  </div>
+
+  <!-- Step Details Strip (monochrome engineering readout) -->
+  <div class="tm-details">
+    {steps.map((s) => (
+      <div class={`tm-detail ${s.idx === 0 ? 'is-active' : ''}`} data-detail={s.idx}>
+        <div class="tm-copy">
+          <div class="tm-kv">
+            <span><strong>Thread:</strong> {s.thread}</span>
+            <span><strong>Boundary:</strong> {s.sync}</span>
           </div>
-        )}
-      </>
-    ))}
-  </div>
-
-  <!-- Step Detail Panels -->
-  <div class="step-panels">
-    {steps.map((s, idx) => (
-      <div
-        class={`step-panel ${idx === 0 ? 'is-active' : ''}`}
-        role="tabpanel"
-        id={`step-panel-${idx}`}
-        aria-labelledby={`step-tab-${idx}`}
-        data-panel={idx}
-      >
-        <div class="step-explain">
-          <div class="step-sym">{s.symbol}</div>
           <h3>{s.title}</h3>
           <p>{s.desc}</p>
-          <div class="step-note">{s.note}</div>
         </div>
-
-        <div class="payload-card">
-          <div class="payload-head">
-            <span>{s.payloadTitle}</span>
-            <span class="payload-badge">{s.payloadBadge}</span>
-          </div>
-          <div class="payload-body">
-            {s.lines.map((line) => (
-              <div class="pl-row">
-                <span class="pl-k">{line.k}</span>
-                <span class={`pl-v ${line.cls}`}>{line.v}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <pre class="tm-code"><code>{s.trace.join('\n')}</code></pre>
       </div>
     ))}
   </div>
 </div>
 
 <style>
-  .stepper {
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 6px;
-    background: #080b12;
+  .tm {
+    border: 1px solid #262e3c;
+    border-radius: 3px;
+    background: #0a0c10;
     overflow: hidden;
   }
 
-  .stepper-bar {
+  .tm-bar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    padding: 0.7rem 1.1rem;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-    background: #0b0f17;
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid #1e242e;
+    background: #0d1016;
   }
 
-  .stepper-title {
+  .tm-meta {
     display: inline-flex;
     align-items: center;
-    gap: 0.85rem;
+    gap: 0.9rem;
     font-family: var(--font-mono);
     font-size: 0.74rem;
   }
 
-  .stepper-tag {
-    color: #38bdf8;
-    letter-spacing: 0.08em;
+  .tm-label {
+    color: #d0d7e2;
+    letter-spacing: 0.06em;
     font-weight: 600;
   }
 
-  .stepper-counter {
-    color: #94a3b8;
+  .tm-count {
+    color: #7c8798;
   }
 
-  .stepper-controls {
+  .tm-controls {
     display: inline-flex;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
 
-  .ctrl-btn {
+  .tm-btn {
     appearance: none;
     background: transparent;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    color: #cbd5e1;
+    border: 1px solid #2c3444;
+    color: #c7d0dd;
     font-family: var(--font-mono);
-    font-size: 0.74rem;
-    padding: 0.34rem 0.72rem;
-    border-radius: 4px;
+    font-size: 0.73rem;
+    padding: 0.3rem 0.68rem;
+    border-radius: 2px;
     cursor: pointer;
     transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
   }
 
-  .ctrl-btn:hover {
-    border-color: #38bdf8;
-    color: #f1f5f9;
+  .tm-btn:hover {
+    border-color: #94a3b8;
+    color: #f8fafc;
   }
 
-  .ctrl-btn:focus-visible,
-  .node:focus-visible {
-    outline: 2px solid #38bdf8;
+  .tm-btn:focus-visible,
+  .snode:focus-visible {
+    outline: 2px solid #d4a359;
     outline-offset: 2px;
   }
 
-  .ctrl-play.is-playing {
-    border-color: rgba(52, 211, 153, 0.55);
-    background: rgba(52, 211, 153, 0.1);
-    color: #34d399;
+  .tm-btn.is-playing {
+    border-color: #d4a359;
+    color: #f3d092;
+    background: rgba(212, 163, 89, 0.08);
   }
 
-  /* Horizontal 5-node pipeline */
-  .track {
-    display: flex;
-    align-items: center;
-    padding: 1.25rem 1.25rem 1.1rem;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-    background: #090d15;
+  .tm-canvas {
+    padding: 0.75rem 0.5rem 0.5rem;
     overflow-x: auto;
-    gap: 0;
+    background: #0a0c10;
   }
 
-  .node {
-    appearance: none;
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.52rem 0.85rem;
-    border-radius: 4px;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    background: #0d121d;
-    color: #94a3b8;
-    font-family: var(--font-mono);
-    font-size: 0.76rem;
+  .tm-canvas svg {
+    display: block;
+    width: 100%;
+    min-width: 780px;
+    height: auto;
+  }
+
+  .lane-bg {
+    transition: fill 0.2s ease;
+  }
+
+  .lane-bg.is-active {
+    fill: rgba(226, 232, 240, 0.035);
+  }
+
+  .snode {
     cursor: pointer;
-    transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-    white-space: nowrap;
   }
 
-  .node:hover {
-    border-color: rgba(148, 163, 184, 0.45);
-    color: #f1f5f9;
+  .snode rect {
+    transition: stroke 0.2s ease, fill 0.2s ease;
   }
 
-  .node-num {
-    color: #64748b;
-    font-size: 0.7rem;
+  .snode:hover rect {
+    stroke: #64748b;
   }
 
-  .node.is-done {
-    border-color: rgba(52, 211, 153, 0.42);
-    color: #d1fae5;
-    background: rgba(52, 211, 153, 0.06);
+  .snode.is-done rect {
+    stroke: #525f75;
+    fill: #12161f;
   }
 
-  .node.is-done .node-num {
-    color: #34d399;
+  .snode.is-active rect {
+    stroke: #e2e8f0;
+    fill: #161b26;
+    stroke-width: 1.6;
   }
 
-  .node.is-active {
-    border-color: #38bdf8;
-    color: #f1f5f9;
-    background: rgba(56, 189, 248, 0.12);
-    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
+  .edge {
+    transition: stroke 0.2s ease;
   }
 
-  .node.is-active .node-num {
-    color: #38bdf8;
+  .edge.is-done {
+    stroke: #64748b;
   }
 
-  .rail {
-    flex: 1 1 28px;
-    min-width: 18px;
-    height: 2px;
-    background: rgba(148, 163, 184, 0.18);
-    position: relative;
-    overflow: hidden;
+  .edge.is-active {
+    stroke: #d4a359;
+    stroke-width: 2;
   }
 
-  .rail-fill {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, #34d399, #38bdf8);
-    transform: scaleX(0);
-    transform-origin: left;
-    transition: transform 0.28s ease;
+  #tm-packet {
+    transition: cx 0.28s ease, cy 0.28s ease;
   }
 
-  .rail.is-filled .rail-fill {
-    transform: scaleX(1);
+  .tm-details {
+    border-top: 1px solid #1e242e;
+    background: #0d1016;
   }
 
-  /* Inspector body */
-  .step-panel {
+  .tm-detail {
     display: none;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    gap: 2rem;
-    padding: 1.65rem 1.4rem;
-    align-items: center;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    gap: 1.75rem;
+    padding: 1.35rem 1.25rem;
+    align-items: start;
   }
 
-  .step-panel.is-active {
+  .tm-detail.is-active {
     display: grid;
   }
 
-  @media (prefers-reduced-motion: no-preference) {
-    .step-panel.is-active {
-      animation: panelIn 0.2s ease-out;
-    }
-  }
-
-  @keyframes panelIn {
-    from {
-      opacity: 0.35;
-      transform: translateY(3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .step-sym {
+  .tm-kv {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem 1.25rem;
     font-family: var(--font-mono);
-    font-size: 0.76rem;
-    color: #38bdf8;
-    margin-bottom: 0.45rem;
+    font-size: 0.74rem;
+    color: #8b96a8;
+    margin-bottom: 0.55rem;
   }
 
-  .step-explain h3 {
-    margin: 0 0 0.65rem;
-    font-size: 1.2rem;
+  .tm-kv strong {
+    color: #d0d7e2;
+    font-weight: 500;
+  }
+
+  .tm-copy h3 {
+    margin: 0 0 0.45rem;
+    font-size: 1.05rem;
     font-weight: 600;
-    letter-spacing: -0.02em;
-    color: #f1f5f9;
+    color: #eef2f7;
+    letter-spacing: -0.015em;
   }
 
-  .step-explain p {
-    margin: 0 0 1rem;
-    font-size: 0.92rem;
+  .tm-copy p {
+    margin: 0;
+    font-size: 0.88rem;
     color: #94a3b8;
-    line-height: 1.6;
+    line-height: 1.58;
   }
 
-  .step-note {
+  .tm-code {
+    margin: 0;
+    padding: 0.95rem 1.05rem;
+    border: 1px solid #1f2633;
+    border-radius: 2px;
+    background: #080a0e;
     font-family: var(--font-mono);
-    font-size: 0.76rem;
+    font-size: 0.75rem;
+    line-height: 1.65;
     color: #cbd5e1;
-    padding-left: 0.75rem;
-    border-left: 2px solid #34d399;
-  }
-
-  /* Payload card */
-  .payload-card {
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-radius: 5px;
-    background: #0b0f17;
-    font-family: var(--font-mono);
-    font-size: 0.77rem;
-    overflow: hidden;
-  }
-
-  .payload-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.55rem 0.9rem;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
-    background: #070a10;
-    color: #64748b;
-    font-size: 0.72rem;
-  }
-
-  .payload-badge {
-    color: #34d399;
-  }
-
-  .payload-body {
-    padding: 0.85rem 0.95rem;
-    display: grid;
-    gap: 0.48rem;
-  }
-
-  .pl-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    border-bottom: 1px dashed rgba(148, 163, 184, 0.08);
-    padding-bottom: 0.35rem;
-  }
-
-  .pl-row:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
-  }
-
-  .pl-k {
-    color: #64748b;
-  }
-
-  .pl-v {
-    color: #f1f5f9;
-    text-align: right;
-  }
-
-  .pl-v.str {
-    color: #e2e8f0;
-  }
-
-  .pl-v.num {
-    color: #cbd5e1;
-  }
-
-  .pl-v.acc {
-    color: #38bdf8;
-  }
-
-  .pl-v.sig {
-    color: #34d399;
-  }
-
-  .pl-v.art {
-    color: #eab308;
+    overflow-x: auto;
   }
 
   @media (max-width: 860px) {
-    .step-panel {
+    .tm-detail {
       grid-template-columns: 1fr;
-      gap: 1.35rem;
+      gap: 1rem;
     }
   }
 </style>
 
 <script>
-  const root = document.getElementById('tick-stepper');
+  const root = document.getElementById('thread-model');
   if (root) {
-    const nodes = Array.from(root.querySelectorAll('.node'));
-    const rails = Array.from(root.querySelectorAll('.rail'));
-    const panels = Array.from(root.querySelectorAll('.step-panel'));
-    const counter = document.getElementById('stepper-counter');
-    const prevBtn = document.getElementById('step-prev');
-    const nextBtn = document.getElementById('step-next');
-    const playBtn = document.getElementById('step-play');
+    const nodes = Array.from(root.querySelectorAll('.snode'));
+    const edges = Array.from(root.querySelectorAll('.edge'));
+    const lanes = Array.from(root.querySelectorAll('.lane-bg'));
+    const details = Array.from(root.querySelectorAll('.tm-detail'));
+    const packet = document.getElementById('tm-packet');
+    const counter = document.getElementById('tm-count');
+    const prevBtn = document.getElementById('tm-prev');
+    const nextBtn = document.getElementById('tm-next');
+    const playBtn = document.getElementById('tm-play');
+
+    // Exact center coordinates of each step node + its lane index
+    const coords = [
+      { cx: 316, cy: 48, lane: 0 },
+      { cx: 514, cy: 112, lane: 1 },
+      { cx: 434, cy: 176, lane: 2 },
+      { cx: 664, cy: 240, lane: 3 },
+      { cx: 654, cy: 306, lane: 4 },
+      { cx: 908, cy: 306, lane: 4 },
+    ];
 
     let current = 0;
     let timer = null;
 
-    function setStep(idx, focusNode = false) {
-      current = (idx + nodes.length) % nodes.length;
+    function setStep(idx) {
+      current = (idx + coords.length) % coords.length;
       root.dataset.step = String(current);
-      if (counter) counter.textContent = `Step ${current + 1} / ${nodes.length}`;
+      if (counter) counter.textContent = `Step ${current + 1} / ${coords.length}`;
+
+      const pt = coords[current];
+      if (packet) {
+        packet.setAttribute('cx', String(pt.cx));
+        packet.setAttribute('cy', String(pt.cy));
+      }
+
+      lanes.forEach((l) => {
+        l.classList.toggle('is-active', Number(l.dataset.lane) === pt.lane);
+      });
 
       nodes.forEach((n, i) => {
-        const active = i === current;
-        n.classList.toggle('is-active', active);
+        n.classList.toggle('is-active', i === current);
         n.classList.toggle('is-done', i < current);
-        n.setAttribute('aria-selected', active ? 'true' : 'false');
-        n.setAttribute('tabindex', active ? '0' : '-1');
       });
 
-      rails.forEach((r, i) => {
-        r.classList.toggle('is-filled', i < current);
+      edges.forEach((e, i) => {
+        e.classList.toggle('is-active', i === current - 1);
+        e.classList.toggle('is-done', i < current - 1);
       });
 
-      panels.forEach((p, i) => {
-        p.classList.toggle('is-active', i === current);
+      details.forEach((d, i) => {
+        d.classList.toggle('is-active', i === current);
       });
-
-      if (focusNode) nodes[current]?.focus();
     }
 
     function stopAuto() {
@@ -507,7 +488,7 @@ const steps = [
         timer = null;
       }
       playBtn?.classList.remove('is-playing');
-      if (playBtn) playBtn.textContent = 'Auto-play';
+      if (playBtn) playBtn.textContent = 'Play';
     }
 
     function toggleAuto() {
@@ -517,8 +498,10 @@ const steps = [
       }
       playBtn?.classList.add('is-playing');
       if (playBtn) playBtn.textContent = 'Pause';
-      timer = window.setInterval(() => setStep(current + 1), 2600);
+      timer = window.setInterval(() => setStep(current + 1), 2800);
     }
+
+    setStep(0);
 
     prevBtn?.addEventListener('click', () => {
       stopAuto();
@@ -536,22 +519,18 @@ const steps = [
         setStep(idx);
       });
       node.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowRight') {
+        if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           stopAuto();
-          setStep(idx + 1, true);
+          setStep(idx);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          stopAuto();
+          setStep(idx + 1);
         } else if (e.key === 'ArrowLeft') {
           e.preventDefault();
           stopAuto();
-          setStep(idx - 1, true);
-        } else if (e.key === 'Home') {
-          e.preventDefault();
-          stopAuto();
-          setStep(0, true);
-        } else if (e.key === 'End') {
-          e.preventDefault();
-          stopAuto();
-          setStep(nodes.length - 1, true);
+          setStep(idx - 1);
         }
       });
     });
