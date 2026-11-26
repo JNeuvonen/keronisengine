@@ -9,6 +9,7 @@
 ## Documentation pages
 
 - [Overview](https://engine.keronis.ai/)
+- [Documentation](https://engine.keronis.ai/docs/)
 - [Quickstart](https://engine.keronis.ai/quickstart/)
 - [Architecture](https://engine.keronis.ai/architecture/)
 - [Strategies](https://engine.keronis.ai/strategies/)

@@ -19,6 +19,9 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/custom.css'],
+      components: {
+        Header: './src/components/StarlightHeader.astro',
+      },
       head: [
         {
           tag: 'link',
@@ -66,6 +69,7 @@ export default defineConfig({
         {
           label: 'Getting Started',
           items: [
+            { label: 'Overview', slug: 'docs' },
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Comparison', slug: 'comparison' },
           ],
@@ -73,9 +77,9 @@ export default defineConfig({
         {
           label: 'Core Concepts',
           items: [
+            { label: 'Architecture', link: '/architecture/' },
             { label: 'Strategies', slug: 'strategies' },
             { label: 'State Machines & ONNX', slug: 'state-machines' },
-            { label: 'Architecture', slug: 'architecture' },
           ],
         },
         {

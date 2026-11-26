@@ -1,0 +1,936 @@
+---
+const title = 'Architecture — KeronisEngine';
+const description =
+  'Module boundaries, live_infra StateUpdater runtime, standby handoff, offline Parquet pipeline, and RingBufferBook internals.';
+const GH = 'https://github.com/JNeuvonen/keronisengine/tree/main';
+
+const modules = [
+  {
+    name: 'market_data',
+    href: `${GH}/src/cpp/packages/market_data`,
+    owns: 'MarketDataStreamManager, MarketDataStreams, OhlcvDataset / DatasetsManager, BarAggregator, LighterOrderBook, DepthHistory, StrategyStateMachine, StateMachineDispatcher, SMSyncer',
+    excludes: 'Orders, positions, accounts, venue execution',
+  },
+  {
+    name: 'trading_engine',
+    href: `${GH}/src/cpp/packages/trading_engine`,
+    owns: 'Core::Engine, Core::Strategy, Core::TradeTicker (base), RingBufferBook, risk and rate limits, BacktestState, BacktestTradeTicker',
+    excludes: 'Live sockets, venue signing, PostgreSQL, NATS',
+  },
+  {
+    name: 'live_infra',
+    href: `${GH}/src/cpp/packages/live_infra`,
+    owns: 'Live::StateUpdater, Live::LiveTradeTicker, Live::AccountStreamManager, Live::PaperExchange, QuoteHolds, native venue clients, standby handoff',
+    excludes: 'Backtest replay',
+  },
+  {
+    name: 'backtest_runner',
+    href: `${GH}/src/cpp/packages/backtest_runner`,
+    owns: 'CLI entry point parsing config.json, driving Core::BacktestState, and emitting summary.json, trades.json, equity_curve.json',
+    excludes: 'PostgreSQL, NATS, live venues',
+  },
+  {
+    name: 'historical_feature_gen',
+    href: `${GH}/src/cpp/packages/historical_feature_gen`,
+    owns: 'MergeIterator and Parquet writer replaying historical market data through registered StrategyStateMachines',
+    excludes: 'Orders, strategies, live venues',
+  },
+  {
+    name: 'engine_control_server',
+    href: `${GH}/src/cpp/packages/engine_control_server`,
+    owns: 'Embedded localhost HTTP server (cpp-httplib) exposing introspection and gated runtime controls on Core::Engine',
+    excludes: 'Venue I/O',
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap"
+    />
+    <style>
+      :root {
+        --bg: #06090f;
+        --bg-elev: #0b1019;
+        --bg-surface: #0f1623;
+        --border: rgba(148, 163, 184, 0.14);
+        --border-strong: rgba(148, 163, 184, 0.24);
+        --text: #f1f5f9;
+        --text-2: #cbd5e1;
+        --text-3: #8b9bb4;
+        --accent: #38bdf8;
+        --emerald: #34d399;
+        --amber: #eab308;
+        --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        background: var(--bg);
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        overflow-x: hidden;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.85em;
+        color: #cbd5e1;
+        background: rgba(15, 23, 42, 0.75);
+        padding: 0.1rem 0.35rem;
+        border-radius: 3px;
+        border: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      .wrap {
+        width: min(1120px, calc(100% - 3rem));
+        margin-inline: auto;
+      }
+
+      /* Navigation */
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: rgba(6, 9, 15, 0.86);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .nav {
+        height: 62px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1.5rem;
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-weight: 600;
+        font-size: 0.96rem;
+        letter-spacing: -0.02em;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 1.75rem;
+        font-size: 0.88rem;
+        color: var(--text-3);
+      }
+
+      .nav-links a {
+        transition: color 0.15s ease;
+      }
+
+      .nav-links a:hover,
+      .nav-links a[aria-current='page'] {
+        color: var(--text);
+      }
+
+      .nav-links a[aria-current='page'] {
+        color: var(--accent);
+      }
+
+      .nav-gh {
+        padding: 0.36rem 0.78rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 5px;
+        color: var(--text-2);
+        font-size: 0.84rem;
+      }
+
+      .nav-gh:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+
+      /* Page header */
+      .page-hero {
+        padding: 4.75rem 0 3.25rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .kicker {
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 0.75rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.1rem, 4.4vw, 3.1rem);
+        font-weight: 600;
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+        max-width: 18ch;
+      }
+
+      .lead {
+        margin: 1.15rem 0 0;
+        font-size: 1.08rem;
+        line-height: 1.6;
+        color: var(--text-2);
+        max-width: 64ch;
+      }
+
+      .anchor-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 1.85rem;
+      }
+
+      .anchor-bar a {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--text-3);
+        padding: 0.34rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--bg-elev);
+        transition: border-color 0.15s ease, color 0.15s ease;
+      }
+
+      .anchor-bar a:hover {
+        border-color: var(--border-strong);
+        color: var(--text);
+      }
+
+      /* Sections */
+      .band {
+        padding: 4.25rem 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .band:last-of-type {
+        border-bottom: none;
+      }
+
+      .sec-head {
+        max-width: 68ch;
+        margin-bottom: 2rem;
+      }
+
+      .sec-head h2 {
+        margin: 0;
+        font-size: clamp(1.45rem, 2.6vw, 1.9rem);
+        font-weight: 600;
+        letter-spacing: -0.025em;
+        line-height: 1.2;
+      }
+
+      .sec-desc {
+        margin: 0.65rem 0 0;
+        color: var(--text-3);
+        font-size: 0.96rem;
+        line-height: 1.62;
+      }
+
+      /* Diagram frame */
+      .diagram-frame {
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: var(--bg-elev);
+        padding: 1.5rem;
+        overflow-x: auto;
+      }
+
+      .diagram-frame svg {
+        display: block;
+        width: 100%;
+        min-width: 760px;
+        height: auto;
+      }
+
+      /* Table */
+      .table-wrap {
+        margin-top: 2rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow-x: auto;
+        background: var(--bg-elev);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+
+      th {
+        text-align: left;
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-3);
+        padding: 0.85rem 1.1rem;
+        border-bottom: 1px solid var(--border-strong);
+        background: rgba(15, 22, 35, 0.7);
+      }
+
+      td {
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+        color: var(--text-2);
+        line-height: 1.55;
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      .mod-link {
+        font-family: var(--font-mono);
+        font-size: 0.84rem;
+        font-weight: 600;
+        color: var(--accent);
+        white-space: nowrap;
+      }
+
+      .mod-link:hover {
+        text-decoration: underline;
+      }
+
+      .seam-note {
+        margin-top: 1.25rem;
+        padding: 0.9rem 1.1rem;
+        border-left: 2px solid var(--accent);
+        background: rgba(11, 16, 25, 0.75);
+        font-size: 0.9rem;
+        color: var(--text-2);
+      }
+
+      /* Lifecycle ordered list */
+      .steps-grid {
+        margin-top: 2rem;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+
+      .step-card {
+        background: var(--bg-elev);
+        padding: 1.25rem 1.15rem;
+      }
+
+      .step-num {
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        color: var(--accent);
+        margin-bottom: 0.45rem;
+      }
+
+      .step-card h3 {
+        margin: 0 0 0.45rem;
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .step-card p {
+        margin: 0;
+        font-size: 0.83rem;
+        line-height: 1.55;
+        color: var(--text-3);
+      }
+
+      /* Parquet spec block */
+      .spec-box {
+        margin-top: 1.75rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-elev);
+        padding: 1.15rem 1.25rem;
+      }
+
+      .spec-label {
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-3);
+        margin-bottom: 0.5rem;
+      }
+
+      .spec-path {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        color: var(--accent);
+        background: #070b12;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.65rem 0.85rem;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+
+      .spec-cols {
+        margin: 0.85rem 0 0;
+        font-size: 0.85rem;
+        color: var(--text-3);
+        line-height: 1.65;
+      }
+
+      /* Internals cards */
+      .internals-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1.5rem;
+      }
+
+      .spec-card {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-elev);
+        padding: 1.4rem 1.35rem;
+      }
+
+      .spec-card h3 {
+        margin: 0 0 0.75rem;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .spec-card ul {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: var(--text-3);
+        font-size: 0.86rem;
+        line-height: 1.6;
+      }
+
+      .spec-card li + li {
+        margin-top: 0.45rem;
+      }
+
+      /* Next links */
+      .next-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .next-card {
+        display: block;
+        padding: 1.15rem 1.2rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-elev);
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+
+      .next-card:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-surface);
+      }
+
+      .next-card strong {
+        display: block;
+        font-size: 0.92rem;
+        color: var(--text);
+        margin-bottom: 0.3rem;
+      }
+
+      .next-card span {
+        font-size: 0.82rem;
+        color: var(--text-3);
+      }
+
+      /* Footer */
+      footer {
+        border-top: 1px solid var(--border);
+        padding: 2.25rem 0 2.75rem;
+        color: var(--text-3);
+        font-size: 0.84rem;
+      }
+
+      .foot-grid {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .foot-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.25rem;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+      }
+
+      .foot-links a:hover {
+        color: var(--text);
+      }
+
+      @media (max-width: 960px) {
+        .steps-grid {
+          grid-template-columns: 1fr;
+        }
+        .internals-grid {
+          grid-template-columns: 1fr;
+        }
+        .next-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        .wrap {
+          width: calc(100% - 2rem);
+        }
+        .nav-links {
+          gap: 1rem;
+          font-size: 0.84rem;
+        }
+        .next-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <div class="wrap nav">
+        <a href="/" class="brand" aria-label="KeronisEngine Home">
+          <svg width="24" height="24" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <rect x="1.5" y="1.5" width="25" height="25" rx="4" fill="#0b0f17" stroke="#38bdf8" stroke-width="1.4" />
+            <path d="M8.5 7v14M8.5 14l8-7M12.5 10.5l6.5 10.5" stroke="#f1f5f9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>KeronisEngine</span>
+        </a>
+        <nav class="nav-links" aria-label="Primary">
+          <a href="/architecture/" aria-current="page">Architecture</a>
+          <a href="/docs/">Docs</a>
+          <a href="/quickstart/">Quickstart</a>
+          <a href="https://github.com/JNeuvonen/keronisengine" class="nav-gh">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="page-hero">
+        <div class="kicker">Architecture</div>
+        <h1>System architecture</h1>
+        <p class="lead">
+          Three decoupled C++20 layers—market data, core engine, and execution—connected through
+          narrow compile-time and runtime seams so offline replay, paper trading, and live execution
+          run the same strategy and feature code.
+        </p>
+        <div class="anchor-bar">
+          <a href="#layers">Module boundaries</a>
+          <a href="#live-runtime">Live runtime (live_infra)</a>
+          <a href="#offline-pipeline">Offline pipeline</a>
+          <a href="#internals">Core internals</a>
+        </div>
+      </section>
+
+      <!-- 1. Layers & Module Boundaries -->
+      <section class="band" id="layers">
+        <div class="sec-head">
+          <div class="kicker">01 · Boundaries</div>
+          <h2>Three layers connected by narrow seams</h2>
+          <p class="sec-desc">
+            Each layer compiles independently. Core trading logic never touches live sockets,
+            PostgreSQL, or NATS.
+          </p>
+        </div>
+
+        <div class="diagram-frame">
+          <svg viewBox="0 0 1040 164" role="img" aria-label="Three-layer separation: market_data to trading_engine to execution" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="a-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M0 1 L8 4 L0 7 z" fill="#64748b" />
+              </marker>
+            </defs>
+
+            <line x1="312" y1="82" x2="362" y2="82" stroke="#475569" stroke-width="1.8" marker-end="url(#a-arr)" />
+            <line x1="676" y1="82" x2="726" y2="82" stroke="#475569" stroke-width="1.8" marker-end="url(#a-arr)" />
+
+            <!-- Layer 1 -->
+            <rect x="12" y="16" width="300" height="132" rx="5" fill="#0d1522" stroke="#38bdf8" stroke-opacity="0.55" />
+            <text x="28" y="42" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">01 · DATA &amp; FEATURES</text>
+            <text x="28" y="66" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="15" font-weight="600">market_data</text>
+            <text x="28" y="92" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">Live WS / Parquet ingest</text>
+            <text x="28" y="110" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">BarAggregator · OhlcvDataset</text>
+            <text x="28" y="128" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">StrategyStateMachine dispatcher</text>
+
+            <!-- Layer 2 -->
+            <rect x="366" y="16" width="310" height="132" rx="5" fill="#0d1522" stroke="#34d399" stroke-opacity="0.55" />
+            <text x="382" y="42" fill="#34d399" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">02 · CORE ENGINE &amp; STRATEGIES</text>
+            <text x="382" y="66" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="15" font-weight="600">trading_engine + ONNX</text>
+            <text x="382" y="92" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">RingBufferBook · BBA · Inventory</text>
+            <text x="382" y="110" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">In-process ONNX Runtime scoring</text>
+            <text x="382" y="128" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">Strategy callbacks · Risk &amp; rate caps</text>
+
+            <!-- Layer 3 -->
+            <rect x="730" y="16" width="298" height="132" rx="5" fill="#0d1522" stroke="#eab308" stroke-opacity="0.55" />
+            <text x="746" y="42" fill="#eab308" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">03 · EXECUTION</text>
+            <text x="746" y="66" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="15" font-weight="600">Backtest · Paper · Live</text>
+            <text x="746" y="92" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">BacktestTradeTicker → BacktestState</text>
+            <text x="746" y="110" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">LiveTradeTicker → PaperExchange</text>
+            <text x="746" y="128" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">Native signers · cpp_live_proxy</text>
+          </svg>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th>Owns</th>
+                <th>Does not touch</th>
+              </tr>
+            </thead>
+            <tbody>
+              {modules.map((m) => (
+                <tr>
+                  <td><a href={m.href} target="_blank" rel="noopener noreferrer" class="mod-link">{m.name} ↗</a></td>
+                  <td>{m.owns}</td>
+                  <td>{m.excludes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="seam-note">
+          The execution seam is <code>Core::TradeTicker</code>: <code>live_infra</code> instantiates
+          <code>Live::LiveTradeTicker</code> (routing orders through <code>Live::StateUpdater</code>),
+          while <code>backtest_runner</code> instantiates <code>Core::BacktestTradeTicker</code>
+          (routing orders into <code>Core::BacktestState</code>).
+        </div>
+      </section>
+
+      <!-- 2. Live Runtime Topology -->
+      <section class="band" id="live-runtime">
+        <div class="sec-head">
+          <div class="kicker">02 · Live Runtime</div>
+          <h2>Single-process live topology &amp; standby handoff</h2>
+          <p class="sec-desc">
+            <code>Live::StateUpdater</code> orchestrates public streams, order books, watchdogs,
+            persistence, and execution in one Linux process with cron-managed zero-downtime restarts.
+          </p>
+        </div>
+
+        <div class="diagram-frame">
+          <svg viewBox="0 0 1040 330" role="img" aria-label="Live runtime topology of live_infra StateUpdater" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="l-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+                <path d="M0 1 L8 4 L0 7 z" fill="#64748b" />
+              </marker>
+            </defs>
+
+            <!-- Subgraph frames -->
+            <rect x="12" y="14" width="248" height="224" rx="5" fill="rgba(56,189,248,0.03)" stroke="#243044" stroke-dasharray="4 4" />
+            <text x="24" y="34" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600">MARKET_DATA</text>
+
+            <rect x="284" y="14" width="468" height="224" rx="5" fill="rgba(52,211,153,0.03)" stroke="#243044" stroke-dasharray="4 4" />
+            <text x="296" y="34" fill="#34d399" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600">CORE::ENGINE + LIVE::STATEUPDATER</text>
+
+            <rect x="776" y="14" width="252" height="224" rx="5" fill="rgba(234,179,8,0.03)" stroke="#243044" stroke-dasharray="4 4" />
+            <text x="788" y="34" fill="#eab308" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600">EXECUTION &amp; STREAMS</text>
+
+            <!-- Connectors -->
+            <line x1="244" y1="80" x2="298" y2="80" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="244" y1="186" x2="298" y2="186" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="504" y1="80" x2="538" y2="80" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="504" y1="186" x2="538" y2="186" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="636" y1="112" x2="636" y2="152" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="734" y1="80" x2="790" y2="80" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="734" y1="186" x2="790" y2="186" stroke="#475569" stroke-width="1.5" marker-end="url(#l-arr)" />
+            <line x1="518" y1="238" x2="518" y2="268" stroke="#475569" stroke-width="1.5" />
+
+            <!-- Left column boxes -->
+            <rect x="26" y="50" width="218" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="38" y="74" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">MarketDataStreamManager</text>
+            <text x="38" y="94" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Public WS · BarAggregator</text>
+
+            <rect x="26" y="156" width="218" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="38" y="180" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">StateMachineDispatcher</text>
+            <text x="38" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Lock-free queue · SMSyncer</text>
+
+            <!-- Center boxes -->
+            <rect x="302" y="50" width="202" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="314" y="74" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">live_event_queue_</text>
+            <text x="314" y="94" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Consumer → RingBufferBook</text>
+
+            <rect x="542" y="50" width="192" height="60" rx="4" fill="#0d1826" stroke="#38bdf8" stroke-opacity="0.6" />
+            <text x="554" y="74" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Core::Strategy + ONNX</text>
+            <text x="554" y="94" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="9.5">Predictions &amp; execution pools</text>
+
+            <rect x="302" y="156" width="202" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="314" y="180" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">RunTradeLoop()</text>
+            <text x="314" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Watchdogs · QuoteHolds · Sync</text>
+
+            <rect x="542" y="156" width="192" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="554" y="180" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">LiveTradeTicker</text>
+            <text x="554" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">200 create · 100 cancel pool</text>
+
+            <!-- Right column boxes -->
+            <rect x="794" y="50" width="218" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="806" y="74" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">PaperExchange</text>
+            <text x="806" y="94" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Dedicated thread · depth fills</text>
+
+            <rect x="794" y="156" width="218" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="806" y="180" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Native Signers / Proxy</text>
+            <text x="806" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">HL · Aster · Polymarket · CCXT</text>
+
+            <!-- Bottom infra bar -->
+            <rect x="12" y="268" width="242" height="48" rx="4" fill="#0b0f17" stroke="#243044" />
+            <text x="26" y="290" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="600">PostgreSQL</text>
+            <text x="26" y="306" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Strategy rows · snapshots · health</text>
+
+            <rect x="270" y="268" width="242" height="48" rx="4" fill="#0b0f17" stroke="#243044" />
+            <text x="284" y="290" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="600">Local Disk &amp; SQLite</text>
+            <text x="284" y="306" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Crash recovery · handoff lock</text>
+
+            <rect x="528" y="268" width="242" height="48" rx="4" fill="#0b0f17" stroke="#243044" />
+            <text x="542" y="290" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="600">NATS + AccountStream</text>
+            <text x="542" y="306" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Events · private user-data WS</text>
+
+            <rect x="786" y="268" width="242" height="48" rx="4" fill="#0b0f17" stroke="#243044" />
+            <text x="800" y="290" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12" font-weight="600">engine_control_server</text>
+            <text x="800" y="306" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Localhost HTTP introspection</text>
+          </svg>
+        </div>
+
+        <div class="steps-grid">
+          <div class="step-card">
+            <div class="step-num">01 · STANDBY CHECK</div>
+            <h3>SQLite liveness</h3>
+            <p>Checks <code>program_start_time.db</code> and <code>heartbeat_cache.db</code>. Exits immediately if an active host is healthy with time remaining.</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">02 · WARMUP</div>
+            <h3>Pre-lock bootstrap</h3>
+            <p>Starts <code>MarketDataStreamManager</code>, OHLCV datasets, consumer loops, and venue clients at low priority before taking the lock.</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">03 · RECOVERY</div>
+            <h3>Lock &amp; disk restore</h3>
+            <p>Acquires <code>/tmp/live_infra_state_lock</code>, runs <code>recover_state_from_disk()</code> for open orders/trades, and marks the engine ready.</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">04 · CONTROL LOOP</div>
+            <h3>Hot-sync &amp; watchdogs</h3>
+            <p>Bumps dead-man's-switch heartbeat, hot-diffs PostgreSQL strategy rows, checks <code>QuoteHolds</code>, and reconciles orders and inventory.</p>
+          </div>
+          <div class="step-card">
+            <div class="step-num">05 · HANDOFF</div>
+            <h3>Graceful shutdown</h3>
+            <p>On <code>SIGTERM</code> or max runtime, pulls resting entry quotes, flushes state to disk and Postgres, and releases the lock to the standby.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Offline Pipeline -->
+      <section class="band" id="offline-pipeline">
+        <div class="sec-head">
+          <div class="kicker">03 · Offline Pipeline</div>
+          <h2>Feature generation and historical replay</h2>
+          <p class="sec-desc">
+            Neither <code>historical_feature_gen</code> nor <code>backtest_runner</code> depends on
+            <code>live_infra</code>, PostgreSQL, or NATS. Both read partitioned Parquet under
+            <code>DATA_DIR_ROOT</code> and link the same state machine and strategy registries.
+          </p>
+        </div>
+
+        <div class="diagram-frame">
+          <svg viewBox="0 0 1040 190" role="img" aria-label="Offline Parquet feature generation and backtest replay pipeline" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="o-arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+                <path d="M0 1 L8 4 L0 7 z" fill="#64748b" />
+              </marker>
+            </defs>
+
+            <!-- Top train row -->
+            <line x1="196" y1="54" x2="238" y2="54" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+            <line x1="436" y1="54" x2="478" y2="54" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+            <line x1="676" y1="54" x2="718" y2="54" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+            <path d="M 818 82 L 818 106 L 578 106 L 578 118" fill="none" stroke="#eab308" stroke-opacity="0.7" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#o-arr)" />
+
+            <!-- Bottom backtest row -->
+            <line x1="196" y1="146" x2="238" y2="146" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+            <line x1="436" y1="146" x2="478" y2="146" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+            <line x1="676" y1="146" x2="718" y2="146" stroke="#475569" stroke-width="1.5" marker-end="url(#o-arr)" />
+
+            <!-- Row 1 -->
+            <rect x="12" y="26" width="184" height="56" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="24" y="50" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Partitioned Parquet</text>
+            <text x="24" y="68" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">OHLCV · Trades · L2</text>
+
+            <rect x="242" y="26" width="194" height="56" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="254" y="50" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">historical_feature_gen</text>
+            <text x="254" y="68" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">MergeIterator replay</text>
+
+            <rect x="482" y="26" width="194" height="56" rx="4" fill="#0d1826" stroke="#38bdf8" stroke-opacity="0.6" />
+            <text x="494" y="50" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">StrategyStateMachine</text>
+            <text x="494" y="68" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="9.5">Emit feature panels</text>
+
+            <rect x="722" y="26" width="304" height="56" rx="4" fill="#14120a" stroke="#eab308" stroke-opacity="0.5" />
+            <text x="734" y="50" fill="#fef08a" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Offline Training → model.onnx</text>
+            <text x="734" y="68" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">LightGBM / XGBoost / PyTorch → ONNX</text>
+
+            <!-- Row 2 -->
+            <rect x="12" y="118" width="184" height="56" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="24" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">backtest_runner</text>
+            <text x="24" y="160" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">config.json + BacktestState</text>
+
+            <rect x="242" y="118" width="194" height="56" rx="4" fill="#0d1826" stroke="#38bdf8" stroke-opacity="0.6" />
+            <text x="254" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Same State Machines</text>
+            <text x="254" y="160" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="9.5">RingBufferBook + OHLCV</text>
+
+            <rect x="482" y="118" width="194" height="56" rx="4" fill="#0b0f17" stroke="#34d399" stroke-opacity="0.55" />
+            <text x="494" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Core::Engine + ONNX</text>
+            <text x="494" y="160" fill="#34d399" font-family="IBM Plex Mono, monospace" font-size="9.5">BacktestTradeTicker</text>
+
+            <rect x="722" y="118" width="304" height="56" rx="4" fill="#0b0f17" stroke="#2a3548" />
+            <text x="734" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Deterministic Output</text>
+            <text x="734" y="160" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">summary.json · trades.json · equity_curve.json</text>
+          </svg>
+        </div>
+
+        <div class="spec-box">
+          <div class="spec-label">Parquet OHLCV Layout</div>
+          <code class="spec-path">&lt;DATA_DIR_ROOT&gt;/derived/bars/&lt;exchange&gt;/&lt;market_type&gt;/time/&lt;interval_ms&gt;_ms/&lt;SYMBOL&gt;/parquets/year=YYYY/month=MM/day=DD/YYYY-MM-DD.parquet</code>
+          <p class="spec-cols">
+            Required columns (<code>ohlcv_dataset_tick.cpp</code>): <code>kline_open_time_ms</code> (int64),
+            <code>kline_close_time_ms</code> (int64), <code>open_price</code>, <code>high_price</code>,
+            <code>low_price</code>, <code>close_price</code>, <code>volume</code>,
+            <code>quote_asset_volume</code> (float64), <code>number_of_trades</code> (int64),
+            <code>taker_buy_base_volume</code>, <code>taker_buy_quote_volume</code> (float64).
+          </p>
+        </div>
+      </section>
+
+      <!-- 4. Core Internals -->
+      <section class="band" id="internals">
+        <div class="sec-head">
+          <div class="kicker">04 · Internals</div>
+          <h2>Memory layout, fill simulation, and numerics</h2>
+        </div>
+
+        <div class="internals-grid">
+          <div class="spec-card">
+            <h3><code>RingBufferBook</code></h3>
+            <ul>
+              <li>Flat tick-indexed array hashed by <code>tick_idx &amp; mask</code> instead of tree nodes.</li>
+              <li>16-byte POD slots (<code>tick_tag</code>, <code>updated_sec</code>, <code>qty</code>); tag mismatch rejects stale wrapped slots.</li>
+              <li>64-bit occupancy bitmap skips empty ranges with <code>__builtin_ctzll</code>.</li>
+              <li>Allocated with <code>make_unique_for_overwrite</code> so untouched pages use zero physical RAM (19-bit exchange / 10-bit Polymarket window).</li>
+              <li><code>apply_bid</code> benchmarks at ~1.5 ns/op on Intel Core Ultra 9 285K.</li>
+            </ul>
+          </div>
+
+          <div class="spec-card">
+            <h3><code>BacktestState</code> vs <code>PaperExchange</code></h3>
+            <ul>
+              <li><code>BacktestState</code> replays Parquet events in timestamp order with latency, maker/taker fees, leverage, and Polymarket queue-notional tracking.</li>
+              <li><code>PaperExchange</code> runs on a dedicated thread inside <code>live_infra</code> against live feeds.</li>
+              <li>Paper taker orders evaluate at <code>ack + latency</code> with <code>PAPER_SLIPPAGE_BPS</code> (default <code>3</code>).</li>
+              <li>Resting remainders fill as maker against quotes and subsequent prints; cancels stop later fills immediately.</li>
+            </ul>
+          </div>
+
+          <div class="spec-card">
+            <h3>Numerics &amp; process model</h3>
+            <ul>
+              <li>All C++ targets compile with <code>-fno-fast-math -fno-strict-aliasing -ffp-contract=off -frounding-math</code>.</li>
+              <li>Quantities, fees, and realized PnL use <code>mpfr::mpreal</code> over dynamically linked MPFR/GMP.</li>
+              <li><code>Core::Engine</code> is a process-wide singleton matching the one-process-per-host model.</li>
+              <li><code>trading_engine</code> headers reside under <code>include/market_making/</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- Next steps into Docs -->
+      <section class="band">
+        <div class="sec-head">
+          <div class="kicker">Documentation</div>
+          <h2>Continue in the docs</h2>
+        </div>
+        <div class="next-grid">
+          <a href="/quickstart/" class="next-card">
+            <strong>Quickstart →</strong>
+            <span>Docker or native build, tests, and example backtest</span>
+          </a>
+          <a href="/strategies/" class="next-card">
+            <strong>Strategies →</strong>
+            <span>Compiled examples, locking rules, out-of-tree builds</span>
+          </a>
+          <a href="/state-machines/" class="next-card">
+            <strong>State Machines &amp; ONNX →</strong>
+            <span>Streaming C++ features and in-process inference</span>
+          </a>
+          <a href="/live-and-paper/" class="next-card">
+            <strong>Live &amp; Paper Trading →</strong>
+            <span>Docker Compose stack, PaperExchange, QuoteHolds</span>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap foot-grid">
+        <div>KeronisEngine · Apache-2.0 License · Provided as-is without warranty.</div>
+        <div class="foot-links">
+          <a href="/">home</a>
+          <a href="/architecture/">architecture</a>
+          <a href="/docs/">docs</a>
+          <a href="/quickstart/">quickstart</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="/llms-full.txt">llms-full.txt</a>
+          <a href="https://github.com/JNeuvonen/keronisengine">github</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
