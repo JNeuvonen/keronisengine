@@ -1,4 +1,6 @@
 ---
+const GH = 'https://github.com/JNeuvonen/keronisengine/blob/main';
+
 const steps = [
   {
     idx: 0,
@@ -16,7 +18,10 @@ const steps = [
   "q": "1.85",
   "m": false
 }`,
-    sourceRef: 'normalized_trade.cpp:59 · market_data_streams.cpp:1423–1444',
+    links: [
+      { label: 'normalized_trade.cpp:59', href: `${GH}/src/cpp/packages/market_data/src/normalized_trade.cpp#L59` },
+      { label: 'market_data_streams.cpp:1423–1444', href: `${GH}/src/cpp/packages/market_data/src/market_data_streams.cpp#L1423-L1444` },
+    ],
     code: `DataRecorder::getInstance().record_with_symbol(..., msg);
 BarAggregator::getInstance().add_trade(trade, true);
 StateMachineDispatcher::get_instance().enqueue(MarketEvent(ev));
@@ -25,18 +30,21 @@ live_event_callback_(std::move(ev));`,
   {
     idx: 1,
     col: 1,
-    headline: 'Dedicated SM thread updates rolling C++ feature state',
+    headline: 'Dedicated SM thread updates your compiled C++ feature state',
     sync: 'Shared C++ code between offline feature generation and live trading',
-    dataTitle: 'WindowedTakerFlowSM::emit_state()',
-    data: `bucket[ts_sec % 3600].buy_volume += 100420.50 * 1.85
-emit_state() -> float[5] {
-  buy_ratio_5s:     0.780f,
-  trade_count_5s:   14.0f,
-  buy_volume_5s:    185778.0f,
-  sell_volume_5s:   52400.0f,
-  vol_ratio_5s_30s: 0.412f
+    dataTitle: 'YourFeatureSM::emit_state() -> vector<float>',
+    data: `// Plug in any StrategyStateMachine (out-of-tree via -DKERONIS_STRATEGY_DIRS)
+emit_state() -> float[N] {
+  your_feature_0:  0.780f,
+  your_feature_1:  14.0f,
+  your_feature_2:  0.412f,
+  ...
+  your_feature_n:  -0.195f
 }`,
-    sourceRef: 'state_machine_dispatcher.cpp:64 · windowed_taker_flow_sm.cpp:65',
+    links: [
+      { label: 'state_machine_dispatcher.cpp:64', href: `${GH}/src/cpp/packages/market_data/src/state_machine_dispatcher.cpp#L64` },
+      { label: 'strategy_state_machine.h', href: `${GH}/src/cpp/packages/market_data/include/market_data/strategy_state_machine.h` },
+    ],
     code: `// Versioned local snapshot — no mutex on hot path
 for (auto& sm : snapshot) {
     sm->react(event);
@@ -45,28 +53,34 @@ for (auto& sm : snapshot) {
   {
     idx: 2,
     col: 2,
-    headline: 'Async worker pool scores ONNX in-process & stores atomic signal',
+    headline: 'Async worker pool reads features + OHLCV bars & scores ONNX',
     sync: 'In-flight guarded pool (hardware_concurrency) → atomic_signal_main',
     dataTitle: 'OnnxModel::predict() → AtomicSignal',
-    data: `model:              "taker_flow_v1.onnx" (C++ session)
-input_tensor:       float[1, 5]
+    data: `model:              "your_model.onnx" (in-process C++ session)
+inputs:             sm->emit_state() + latest OhlcvDataset bars
 predicted_score:    0.712f  (> 0.650f entry threshold)
 atomic_signal_main: store(0.712f, 1732632012418)`,
-    sourceRef: 'engine.cpp:728 · binance_onnx_perp.cpp:34',
+    links: [
+      { label: 'engine.cpp:728', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L728` },
+      { label: 'binance_onnx_perp.cpp:34', href: `${GH}/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp#L34` },
+    ],
     code: `float score = model->predict(*features);
 ticker->atomic_signal_main.store(score, now_ms);`,
   },
   {
     idx: 3,
     col: 3,
-    headline: 'Strategy pool reads latest signal, bars & books and checks risk',
+    headline: 'Strategy pool reads atomic signal, bars & books and checks risk',
     sync: 'ticker->trading_mutex → construct_order() (caps · rate · quote holds)',
     dataTitle: 'Risk Gate & Order Construction',
     data: `signal:      atomic_signal_main.load() == 0.712f
 market_data: latest OhlcvDataset bars + live BBA / books
 risk_gate:   trading_mutex · quotes_pulled=false · PASS
 result:      OrderConstructionResult::VALID`,
-    sourceRef: 'engine.cpp:871 · binance_onnx_perp.cpp:57',
+    links: [
+      { label: 'engine.cpp:871', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L871` },
+      { label: 'binance_onnx_perp.cpp:57', href: `${GH}/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp#L57` },
+    ],
     code: `std::lock_guard lock(ticker->trading_mutex);
 auto [score, ts] = ticker->atomic_signal_main.load();
 StrategyHelpers::submit_market_order(..., decision);`,
@@ -81,7 +95,10 @@ StrategyHelpers::submit_market_order(..., decision);`,
 direct: Polymarket (EIP-712) · Hyperliquid (Rust) · Aster
 proxy:  Binance · Bybit · OKX · Gate.io · IBKR Equities
 sim:    PaperExchange (live depth) · BacktestState (Parquet)`,
-    sourceRef: 'Core::TradeTicker → LiveTradeTicker / BacktestTradeTicker',
+    links: [
+      { label: 'state_updater.cpp:4065', href: `${GH}/src/cpp/packages/live_infra/src/state_updater.cpp#L4065` },
+      { label: 'paper_exchange.h', href: `${GH}/src/cpp/packages/live_infra/include/live_infra/paper_exchange.h` },
+    ],
     code: `// Identical strategy binary across backtest, paper, and live
 ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
   },
@@ -108,7 +125,7 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
     <svg
       viewBox="0 0 1180 356"
       role="img"
-      aria-label="Vertical thread swimlane visualization showing raw Binance trade ticks fanning out to BarAggregator, DataRecorder, live_event_consumer, and directly into StateMachineDispatcher, then asynchronously through ONNX Runtime, atomic_signal_main, strategy_pool, and venue dispatch"
+      aria-label="Vertical thread swimlane visualization showing raw Binance trade ticks fanning out to BarAggregator, DataRecorder, live_event_consumer, and directly into StateMachineDispatcher, with OHLCV bars and books feeding both predictions_pool and strategy_pool"
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
@@ -152,32 +169,36 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <text x="982" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · Execution Seam</text>
       <text x="982" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">Core::TradeTicker</text>
 
-      <!-- CONCURRENT UPPER FAN-OUT TRACK: T1 -> BarAggregator / DataRecorder / live_event_consumer -> T4 -->
+      <!-- CONCURRENT UPPER FAN-OUT: T1 -> BarAggregator (OhlcvDataset) / DataRecorder / live_event_consumer -> T3 & T4 -->
       <path d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#222c3c" stroke-width="1.4" />
       <path class="async-pulse" d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#60a5fa" stroke-width="1.6" marker-end="url(#arr-queue)" />
 
-      <!-- Compact concurrent state node (BarAggregator + DataRecorder + live_event_consumer) -->
+      <!-- Concurrent state bar spanning T2..T3 -->
       <rect x="256" y="72" width="420" height="44" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.16)" stroke-width="1.1" />
       <text x="272" y="91" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">
-        BarAggregator (OHLCV)  ·  DataRecorder  ·  live_event_consumer
+        BarAggregator (OhlcvDataset) · DataRecorder · live_event_consumer
       </text>
       <text id="live-bar" x="272" y="107" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">
         1m bar close 100420.50 · live BBA &amp; books · PaperExchange prints
       </text>
 
-      <!-- Feed from concurrent bars/books into T4 Strategy Pool -->
+      <!-- Tap 1: OHLCV bars & books -> T3 predictions_pool (compute_predictions_callback) -->
+      <path d="M 587 116 L 587 152" fill="none" stroke="#222c3c" stroke-width="1.4" />
+      <path class="async-pulse" d="M 587 116 L 587 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
+
+      <!-- Tap 2: OHLCV bars & books -> T4 strategy_pool (strategy_callback) -->
       <path d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#222c3c" stroke-width="1.4" />
       <path class="async-pulse" d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
 
       <!-- MAIN LEFT-TO-RIGHT HANDOFFS -->
-      <!-- Handoff 0->1: sm_queue_ (Direct lock-free queue from MarketDataStreams -> StateMachineDispatcher) -->
+      <!-- Handoff 0->1: sm_queue_ with animated 3-slot ring buffer -->
       <line x1="192" y1="192" x2="254" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
       <line class="flow-beam" data-beam="0" x1="192" y1="192" x2="250" y2="192" stroke="#60a5fa" stroke-width="2" />
       <g class="q-glyph" transform="translate(206, 182)">
         <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
-        <rect x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
-        <rect x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.5" />
-        <rect x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
+        <rect id="q-s0" x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
+        <rect id="q-s1" x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.5" />
+        <rect id="q-s2" x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
       </g>
       <text x="224" y="256" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">sm_queue_</text>
       <text x="224" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">lock-free MPSC</text>
@@ -186,7 +207,7 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <line x1="434" y1="192" x2="496" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
       <line class="flow-beam" data-beam="1" x1="434" y1="192" x2="492" y2="192" stroke="#cbd5e1" stroke-width="2" />
       <text x="466" y="256" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">emit_state()</text>
-      <text x="466" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">float[5]</text>
+      <text x="466" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">float[N]</text>
 
       <!-- Handoff 2->3: atomic_signal_main -->
       <line x1="676" y1="192" x2="738" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-atom)" />
@@ -205,35 +226,30 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <text x="950" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">risk-checked</text>
 
       <!-- 5 COMPACT STAGE NODES — STRICTLY 2 LINES PER BOX -->
-      <!-- Node 0: Raw Trade -->
       <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Raw Trade ingest">
         <rect x="14" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="28" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Raw Trade</text>
         <text id="live-t1" x="28" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">100420.50 · 1.85 BUY</text>
       </g>
 
-      <!-- Node 1: Feature SM -->
-      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: Streaming Feature SM">
+      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: User-defined Feature SM">
         <rect x="256" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="270" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Feature SM</text>
-        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">buy_ratio 0.780</text>
+        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">float[N] updated</text>
       </g>
 
-      <!-- Node 2: ONNX Model -->
       <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: ONNX Model Inference">
         <rect x="498" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="512" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">ONNX Model</text>
         <text id="live-t3" x="512" y="209" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score 0.712</text>
       </g>
 
-      <!-- Node 3: Strategy & Risk -->
       <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy and Risk Gate">
         <rect x="740" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="754" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Strategy &amp; Risk</text>
         <text id="live-t4" x="754" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 MARKET</text>
       </g>
 
-      <!-- Node 4: Venue Dispatch -->
       <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Venue Dispatch">
         <rect x="982" y="156" width="184" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="996" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Venue Dispatch</text>
@@ -243,12 +259,12 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <!-- Bottom bracket -->
       <path d="M 14 306 L 14 318 L 1166 318 L 1166 306" fill="none" stroke="#222c3c" stroke-width="1.2" />
       <text x="590" y="340" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
-        &lt;1 ms tick → features → inference → order · T3 (ONNX) and T4 (Strategy) poll latest state asynchronously
+        &lt;1 ms tick → features → inference → order · T3 (ONNX) and T4 (Strategy) read latest bars, books &amp; features asynchronously
       </text>
     </svg>
   </div>
 
-  <!-- Quiet, low-chrome data & source inspector -->
+  <!-- Quiet, low-chrome data & source inspector with clickable GitHub links -->
   <div class="ep-inspector">
     {steps.map((s) => (
       <div class={`ep-row ${s.idx === 0 ? 'is-active' : ''}`} data-panel={s.idx}>
@@ -256,7 +272,14 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
           <h3>{s.headline}</h3>
           <div class="ep-sync">{s.sync}</div>
           <div class="ep-src">
-            <span class="ep-src-ref">{s.sourceRef}</span>
+            <div class="ep-src-links">
+              {s.links.map((lnk, li) => (
+                <>
+                  {li > 0 && <span class="ep-sep">·</span>}
+                  <a href={lnk.href} target="_blank" rel="noopener noreferrer">{lnk.label} ↗</a>
+                </>
+              ))}
+            </div>
             <pre><code>{s.code}</code></pre>
           </div>
         </div>
@@ -463,16 +486,31 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
     margin-bottom: 1rem;
   }
 
-  .ep-src {
-    opacity: 0.85;
+  .ep-src-links {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    margin-bottom: 0.4rem;
   }
 
-  .ep-src-ref {
-    display: block;
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    color: #7c8798;
-    margin-bottom: 0.35rem;
+  .ep-src-links a {
+    color: #94a3b8;
+    text-decoration: underline;
+    text-decoration-color: rgba(148, 163, 184, 0.35);
+    text-underline-offset: 2px;
+    transition: color 0.15s ease, text-decoration-color 0.15s ease;
+  }
+
+  .ep-src-links a:hover {
+    color: #f1f5f9;
+    text-decoration-color: #f1f5f9;
+  }
+
+  .ep-sep {
+    color: #475569;
   }
 
   .ep-src pre {
@@ -539,52 +577,62 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
     const elT4 = document.getElementById('live-t4');
     const elT5 = document.getElementById('live-t5');
     const elBar = document.getElementById('live-bar');
+    const qSlots = [
+      document.getElementById('q-s0'),
+      document.getElementById('q-s1'),
+      document.getElementById('q-s2'),
+    ];
 
     const frames = [
       {
         t1: '100418.00 · 0.42 SELL',
-        t2: 'buy_ratio 0.540',
+        t2: 'float[N] seq #408',
         t3: 'score 0.584',
         atom: '0.584',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
         bar: '1m bar close 100418.00 · live BBA & books · PaperExchange prints',
+        qDepth: 1,
       },
       {
         t1: '100419.50 · 0.90 BUY',
-        t2: 'buy_ratio 0.642',
-        t3: 'score 0.584', // async: ONNX polls on its own cadence
+        t2: 'float[N] seq #409',
+        t3: 'score 0.584', // async: ONNX has not re-scored on this tick
         atom: '0.584',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
         bar: '1m bar close 100419.50 · live BBA & books · PaperExchange prints',
+        qDepth: 2,
       },
       {
         t1: '100420.00 · 0.65 BUY',
-        t2: 'buy_ratio 0.710',
+        t2: 'float[N] seq #410',
         t3: 'score 0.641',
         atom: '0.641',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
         bar: '1m bar close 100420.00 · live BBA & books · PaperExchange prints',
+        qDepth: 3,
       },
       {
         t1: '100420.50 · 1.85 BUY',
-        t2: 'buy_ratio 0.780',
+        t2: 'float[N] seq #411',
         t3: 'score 0.712',
         atom: '0.712',
         t4: 'BUY 0.01 MARKET',
         t5: 'Direct · Proxy · Paper',
         bar: '1m bar close 100420.50 · live BBA & books · PaperExchange prints',
+        qDepth: 2,
       },
       {
         t1: '100421.00 · 0.30 BUY',
-        t2: 'buy_ratio 0.794',
+        t2: 'float[N] seq #412',
         t3: 'score 0.712',
         atom: '0.712',
         t4: 'ORDER VALID',
         t5: 'SUBMITTED',
         bar: '1m bar close 100421.00 · live BBA & books · PaperExchange prints',
+        qDepth: 1,
       },
     ];
 
@@ -601,6 +649,12 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       if (elT4) elT4.textContent = f.t4;
       if (elT5) elT5.textContent = f.t5;
       if (elBar) elBar.textContent = f.bar;
+      qSlots.forEach((slot, i) => {
+        if (!slot) return;
+        const filled = i < f.qDepth;
+        slot.setAttribute('fill', filled ? '#60a5fa' : '#1e293b');
+        slot.setAttribute('opacity', filled ? (i === 0 ? '1' : '0.65') : '1');
+      });
     }
 
     function setStep(idx) {
@@ -613,7 +667,9 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       beams.forEach((b, i) => {
         b.classList.toggle('is-active', i === current - 1 || (current === 0 && i === 0));
       });
-      asyncPulses.forEach((p) => p.classList.toggle('is-active', current === 0 || current === 3));
+      asyncPulses.forEach((p) => {
+        p.classList.toggle('is-active', current === 0 || current === 2 || current === 3);
+      });
       panels.forEach((p, i) => p.classList.toggle('is-active', i === current));
     }
 
