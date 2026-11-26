@@ -62,7 +62,7 @@ emit_state() -> float[N] {
       { label: 'state_machine_dispatcher.cpp:64', href: `${GH}/src/cpp/packages/market_data/src/state_machine_dispatcher.cpp#L64` },
       { label: 'strategy_state_machine.h', href: `${GH}/src/cpp/packages/market_data/include/market_data/strategy_state_machine.h` },
     ],
-    code: `// Versioned local snapshot — no mutex on hot path
+    code: `// Versioned local snapshot: no mutex on hot path
 for (auto& sm : snapshot) {
     sm->react(event);
 }`,

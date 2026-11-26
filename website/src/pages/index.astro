@@ -4,7 +4,7 @@ import TickPipelineStepper from '../components/TickPipelineStepper.astro';
 
 const title = 'KeronisEngine — High-Performance Infrastructure for Systematic Trading';
 const description =
-  'A modular C++20 trading engine for predictive models and algorithmic strategies across markets. Unified research, simulation, and live execution.';
+  'C++20 trading engine for predictive models and algorithmic strategies across markets. Unified research, simulation, and live execution.';
 
 const codePolymarketDigital = `// src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp
 // Polymarket digital options market making / high-frequency pricer:
@@ -969,7 +969,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="meta-line">Apache-2.0 · C++20 · Linux</div>
         <h1>High-performance infrastructure for systematic trading.</h1>
         <p class="lead">
-          A modular C++20 trading engine for predictive models and algorithmic strategies across markets.
+          C++20 trading engine for predictive models and algorithmic strategies across markets.
           Unified research, simulation, and live execution.
         </p>
 
@@ -994,7 +994,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
         <div class="ev-item">
           <div class="ev-num"><span>10k+</span> msg/s</div>
-          <div class="ev-lbl">Full-exchange feeds + live scoring on one Linux host</div>
+          <div class="ev-lbl">Full-exchange feeds and live scoring per host</div>
         </div>
         <div class="ev-item">
           <div class="ev-num"><span>1</span> codebase</div>
@@ -1002,7 +1002,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
         <div class="ev-item">
           <div class="ev-num"><span>ONNX</span> native</div>
-          <div class="ev-lbl">Any ONNX-exportable model; extensible to custom runtimes</div>
+          <div class="ev-lbl">In-process ONNX inference; extensible runtimes</div>
         </div>
       </div>
 
@@ -1011,10 +1011,6 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="sec-head">
           <div class="kicker">Architecture</div>
           <h2>Unified from feature generation to live execution</h2>
-          <p class="sec-desc">
-            The same compiled C++ feature engine generates offline training datasets and processes live
-            market events in production—with in-process ONNX scoring and full-stack execution included.
-          </p>
         </div>
 
         <div class="blueprint" id="arch-stage">
@@ -1168,16 +1164,16 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
         <div class="pillars">
           <div class="pillar">
-            <h3>No training–serving code split</h3>
-            <p>Compile feature state machines once and run them identically across historical Parquet generation, backtests, paper trading, and live execution.</p>
+            <h3>Unified feature engine</h3>
+            <p>Feature state machines compile once and run identically across Parquet generation, backtests, paper, and live execution.</p>
           </div>
           <div class="pillar">
-            <h3>Predictive models &amp; arbitrary strategies</h3>
-            <p>ONNX Runtime sits directly in the hot path for ML strategies, while the same event loop runs market making, digital options pricing, or cross-venue arbitrage.</p>
+            <h3>Native model inference</h3>
+            <p>ONNX Runtime runs in-process alongside market making, options pricing, and cross-venue strategies.</p>
           </div>
           <div class="pillar">
-            <h3>Complete stack, trivially extensible</h3>
-            <p>Ships with the C++20 engine, backtester, paper venue, and bundled CCXT/IBKR proxy—making it trivial to add your favourite trading venue or custom data feed.</p>
+            <h3>Extensible execution stack</h3>
+            <p>Includes the C++20 engine, backtester, paper venue, and CCXT/IBKR proxy, with modular interfaces for custom venues and feeds.</p>
           </div>
         </div>
       </section>
@@ -1187,8 +1183,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="sec-head">
           <h2>From tick to signal to order</h2>
           <p class="sec-desc">
-            From raw market data to risk-checked order decisions. Concurrent processing, lock-free
-            event propagation and in-process model inference.
+            Thread-level concurrency, lock-free queues, and atomic signal handoff on the live hot path.
           </p>
         </div>
 
@@ -1199,11 +1194,10 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       <section class="band">
         <div class="sec-head">
           <div class="kicker">Markets &amp; Venues</div>
-          <h2>Built to generalize across asset classes</h2>
+          <h2>Cross-market execution</h2>
           <p class="sec-desc">
-            Crypto, Polymarket, and US equities (Massive.com + IBKR) ship built in—and it is trivial
-            to add your favourite trading venue, broker, or sportsbook feed while reusing the full
-            feature, ONNX, backtest, and risk stack.
+            Built-in adapters cover crypto, Polymarket, and US equities; custom venues integrate through
+            modular stream and ticker interfaces.
           </p>
         </div>
 
@@ -1226,9 +1220,8 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <div class="asset-copy">
             <h3>Polymarket Digital Options Market Making</h3>
             <p>
-              Native Polymarket CLOB WebSockets, EIP-712 bulk signing, multi-outcome order books, and
-              queue-notional backtesting. Price short-dated binary options from live reference feeds or
-              an ONNX probability model and quote YES/NO directly on the CLOB.
+              Native CLOB WebSockets, EIP-712 bulk signing, and multi-outcome order books for pricing
+              and quoting binary contracts from reference feeds or ONNX models.
             </p>
             <div class="venue-list">
               <span class="vtag native">Native CLOB WS</span>
@@ -1258,9 +1251,8 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <div class="asset-copy">
             <h3>Crypto Spot &amp; Perpetuals</h3>
             <p>
-              Process full-exchange live feeds while updating books, streaming features, and continuous
-              ONNX predictions. Execute natively on Hyperliquid and Aster, or route Binance, Bybit, OKX,
-              Gate.io, Bitget, and Coinbase via the bundled venue proxy.
+              Direct native execution on Hyperliquid and Aster, plus Binance, Bybit, OKX, Gate.io,
+              Bitget, and Coinbase routing through the bundled CCXT proxy.
             </p>
             <div class="venue-list">
               <span class="vtag native">Hyperliquid (Rust Signer)</span>
@@ -1289,9 +1281,8 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <div class="asset-copy">
             <h3>US Equities via Massive.com &amp; Interactive Brokers</h3>
             <p>
-              Real-time and historical US equities market data via Massive.com (formerly Polygon.io)
-              paired with Interactive Brokers (IBKR) gateway execution and a survivorship-safe equity
-              catalog—bringing the same C++ feature and ONNX stack to stocks.
+              Real-time and historical market data via Massive.com (formerly Polygon.io) paired with
+              Interactive Brokers gateway execution and an active-plus-delisted symbol catalog.
             </p>
             <div class="venue-list">
               <span class="vtag native">Massive.com (Polygon.io) Feeds</span>
@@ -1320,9 +1311,8 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           <div class="asset-copy">
             <h3>Sports Betting &amp; Custom Event Markets</h3>
             <p>
-              Multi-outcome tickers and modular stream interfaces extend naturally to sportsbooks,
-              betting exchanges, or custom feeds—reusing the full ONNX inference, risk, and
-              simulation pipeline.
+              Multi-outcome books and modular stream interfaces support sportsbooks, betting exchanges,
+              and custom event feeds.
             </p>
             <div class="venue-list">
               <span class="vtag native">Multi-Outcome Books</span>
@@ -1347,15 +1337,11 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
       </section>
 
-      <!-- Real Compiled Source Examples -->
+      <!-- Compiled Source Examples -->
       <section class="band">
         <div class="sec-head">
           <div class="kicker">Source Examples</div>
-          <h2>Market making, predictive ML, and arbitrage—in real C++</h2>
-          <p class="sec-desc">
-            Every strategy style runs on the same compiled core. Keep proprietary alpha in a private
-            directory and link it directly into KeronisEngine without forking.
-          </p>
+          <h2>Strategy and feature implementation</h2>
         </div>
 
         <div class="code-shell">
@@ -1397,37 +1383,37 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
       </section>
 
-      <!-- Progressive Disclosure Documentation Index -->
+      <!-- Documentation Index -->
       <section class="band" style="margin-bottom: 3rem;">
         <div class="sec-head">
           <div class="kicker">Documentation</div>
-          <h2>Explore the system</h2>
+          <h2>System reference</h2>
         </div>
 
         <div class="doc-index">
           <a href="/architecture/" class="doc-link">
             <h3>Architecture &amp; Internals</h3>
-            <p>Module boundaries, threading, standby handoff, <code>RingBufferBook</code> (~1.5 ns/op <code>apply_bid</code>), and MPFR precision.</p>
+            <p>Module boundaries, threading, standby handoff, <code>RingBufferBook</code> (~1.5 ns/op), and MPFR arithmetic.</p>
           </a>
           <a href="/strategies/" class="doc-link">
             <h3>Strategies</h3>
-            <p>Compiled walkthroughs of <code>polymarket_digital</code>, <code>binance_onnx_perp</code>, locking rules, and external builds.</p>
+            <p>Walkthroughs of <code>polymarket_digital</code> and <code>binance_onnx_perp</code>, locking rules, and out-of-tree builds.</p>
           </a>
           <a href="/state-machines/" class="doc-link">
             <h3>State Machines &amp; ONNX</h3>
-            <p>Building streaming C++ feature engines, warmup guards, live reconnect hooks, and ONNX Runtime sessions.</p>
+            <p>Streaming C++ feature state machines, warmup guards, reconnect hooks, and ONNX Runtime sessions.</p>
           </a>
           <a href="/live-and-paper/" class="doc-link">
             <h3>Live, Paper &amp; Proxy</h3>
-            <p>Docker Compose stack (PostgreSQL + NATS + <code>cpp_live_proxy</code>), realistic paper fills, and durable quote holds.</p>
+            <p>Docker Compose stack (PostgreSQL, NATS, <code>cpp_live_proxy</code>), paper fills, and durable quote holds.</p>
           </a>
           <a href="/comparison/" class="doc-link">
             <h3>Comparison</h3>
-            <p>Honest engineering tradeoffs vs. NautilusTrader and HftBacktest.</p>
+            <p>Architectural tradeoffs relative to NautilusTrader and HftBacktest.</p>
           </a>
           <a href="/control-server/" class="doc-link">
             <h3>Control Server &amp; Config</h3>
-            <p>Localhost HTTP introspection (<code>/control/engine/*</code>), health checks, and runtime configuration.</p>
+            <p>Localhost HTTP endpoints (<code>/control/engine/*</code>), health checks, and runtime configuration.</p>
           </a>
         </div>
       </section>
