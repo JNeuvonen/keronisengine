@@ -53,15 +53,15 @@ for (auto& sm : snapshot) {
   {
     idx: 2,
     col: 2,
-    headline: 'Async worker pool reads features + OHLCV bars & scores ONNX',
-    sync: 'In-flight guarded pool (hardware_concurrency) → atomic_signal_main',
-    dataTitle: 'OnnxModel::predict() → AtomicSignal',
-    data: `model:              "your_model.onnx" (in-process C++ session)
+    headline: 'Prediction callback runs on predictions_pool & stores atomic signal',
+    sync: 'compute_predictions_callback (ONNX or custom C++ model) → atomic_signal_main',
+    dataTitle: 'compute_predictions_callback → AtomicSignal',
+    data: `callback:           compute_predictions_callback (async pool)
 inputs:             sm->emit_state() + latest OhlcvDataset bars
-predicted_score:    0.712f  (> 0.650f entry threshold)
+runtime:            ONNX Runtime C++ session (or custom pricer)
 atomic_signal_main: store(0.712f, 1732632012418)`,
     links: [
-      { label: 'engine.cpp:728', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L728` },
+      { label: 'engine.cpp:111, 728', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L728` },
       { label: 'binance_onnx_perp.cpp:34', href: `${GH}/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp#L34` },
     ],
     code: `float score = model->predict(*features);
@@ -70,15 +70,15 @@ ticker->atomic_signal_main.store(score, now_ms);`,
   {
     idx: 3,
     col: 3,
-    headline: 'Strategy pool reads atomic signal, bars & books and checks risk',
-    sync: 'ticker->trading_mutex → construct_order() (caps · rate · quote holds)',
-    dataTitle: 'Risk Gate & Order Construction',
-    data: `signal:      atomic_signal_main.load() == 0.712f
-market_data: latest OhlcvDataset bars + live BBA / books
-risk_gate:   trading_mutex · quotes_pulled=false · PASS
-result:      OrderConstructionResult::VALID`,
+    headline: 'Execution callback reads signal, bars & books and returns StrategyDecision',
+    sync: 'strategy_callback · trading_mutex → construct_order() → enqueue_order_task()',
+    dataTitle: 'strategy_callback → StrategyDecision',
+    data: `callback:    strategy_callback (strategy_thread_pool)
+inputs:      atomic_signal_main.load() + live books & OHLCV bars
+risk_gate:   trading_mutex · quotes_pulled=false · caps=PASS
+return:      StrategyDecision { orders: [BUY 0.01 MARKET] }`,
     links: [
-      { label: 'engine.cpp:871', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L871` },
+      { label: 'engine.cpp:109, 871', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L871` },
       { label: 'binance_onnx_perp.cpp:57', href: `${GH}/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp#L57` },
     ],
     code: `std::lock_guard lock(ticker->trading_mutex);
@@ -88,19 +88,20 @@ StrategyHelpers::submit_market_order(..., decision);`,
   {
     idx: 4,
     col: 4,
-    headline: 'Validated order dispatches across the TradeTicker execution seam',
-    sync: 'Direct signers · bundled cpp_live_proxy · PaperExchange · BacktestState',
-    dataTitle: 'Core::Order Dispatched (<1 ms hot path)',
-    data: `order:  { symbol: "BTCUSDT", side: BUY, type: MARKET, qty: "0.01" }
-direct: Polymarket (EIP-712) · Hyperliquid (Rust) · Aster
-proxy:  Binance · Bybit · OKX · Gate.io · IBKR Equities
-sim:    PaperExchange (live depth) · BacktestState (Parquet)`,
+    headline: 'Dedicated order_thread_pool (200) & cancel pool (100) post to venues',
+    sync: 'enqueue_order_task (200w) · enqueue_cancel_order_task (100w) · non-blocking',
+    dataTitle: 'Order Posting & Cancel Pools (separate from strategy_pool)',
+    data: `create_pool: order_thread_pool (200 workers) -> on_create_order[_bulk]
+cancel_pool: cancel_order_thread_pool (100 workers) -> on_cancel_order
+direct_sign: Polymarket (EIP-712 bulk) · Hyperliquid (Rust) · Aster
+proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
     links: [
-      { label: 'state_updater.cpp:4065', href: `${GH}/src/cpp/packages/live_infra/src/state_updater.cpp#L4065` },
-      { label: 'paper_exchange.h', href: `${GH}/src/cpp/packages/live_infra/include/live_infra/paper_exchange.h` },
+      { label: 'engine.cpp:107–108', href: `${GH}/src/cpp/packages/trading_engine/src/engine.cpp#L107-L108` },
+      { label: 'strategy.cpp:459, 484–498', href: `${GH}/src/cpp/packages/trading_engine/src/strategy.cpp#L484-L498` },
     ],
-    code: `// Identical strategy binary across backtest, paper, and live
-ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
+    code: `engine.enqueue_order_task([this, &engine, order]() mutable {
+    this->on_create_order(engine, order);
+});`,
   },
 ];
 ---
@@ -160,14 +161,14 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <text x="256" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Feature SM</text>
       <text x="256" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">StateMachineDispatcher</text>
 
-      <text x="498" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · ONNX Pool</text>
-      <text x="498" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">predictions_pool (async)</text>
+      <text x="498" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · predictions_pool</text>
+      <text x="498" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">hardware_concurrency()</text>
 
-      <text x="740" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T4 · Strategy Pool</text>
-      <text x="740" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">strategy_pool (async)</text>
+      <text x="740" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T4 · strategy_pool</text>
+      <text x="740" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">hardware_concurrency()</text>
 
-      <text x="982" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · Execution Seam</text>
-      <text x="982" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">Core::TradeTicker</text>
+      <text x="982" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · order_thread_pool</text>
+      <text x="982" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">200 create · 100 cancel</text>
 
       <!-- CONCURRENT UPPER FAN-OUT: T1 -> BarAggregator (OhlcvDataset) / DataRecorder / live_event_consumer -> T3 & T4 -->
       <path d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#222c3c" stroke-width="1.4" />
@@ -219,11 +220,17 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <text x="708" y="256" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="10.5">atomic_signal</text>
       <text x="708" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">store / load</text>
 
-      <!-- Handoff 3->4: TradeTicker seam -->
-      <line x1="918" y1="192" x2="980" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
-      <line class="flow-beam" data-beam="3" x1="918" y1="192" x2="976" y2="192" stroke="#cbd5e1" stroke-width="2" />
-      <text x="950" y="256" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">Core::Order</text>
-      <text x="950" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">risk-checked</text>
+      <!-- Handoff 3->4: order_thread_pool task queue -->
+      <line x1="918" y1="192" x2="980" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
+      <line class="flow-beam" data-beam="3" x1="918" y1="192" x2="976" y2="192" stroke="#60a5fa" stroke-width="2" />
+      <g class="q-glyph" transform="translate(932, 182)">
+        <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
+        <rect x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
+        <rect x="14" y="4" width="7" height="12" rx="1" fill="#1e293b" />
+        <rect x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
+      </g>
+      <text x="950" y="256" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">order_queue</text>
+      <text x="950" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">enqueue_order_task</text>
 
       <!-- 5 COMPACT STAGE NODES — STRICTLY 2 LINES PER BOX -->
       <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Raw Trade ingest">
@@ -235,25 +242,25 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
       <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: User-defined Feature SM">
         <rect x="256" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
         <text x="270" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Feature SM</text>
-        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">float[N] updated</text>
+        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">float[N] seq #411</text>
       </g>
 
-      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: ONNX Model Inference">
+      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: Strategy Prediction Callback">
         <rect x="498" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="512" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">ONNX Model</text>
+        <text x="512" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Prediction Callback</text>
         <text id="live-t3" x="512" y="209" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score 0.712</text>
       </g>
 
-      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy and Risk Gate">
+      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy Execution Callback">
         <rect x="740" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="754" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Strategy &amp; Risk</text>
-        <text id="live-t4" x="754" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 MARKET</text>
+        <text x="754" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Execution Callback</text>
+        <text id="live-t4" x="754" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 VALID</text>
       </g>
 
-      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Venue Dispatch">
+      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Order Posting Pool">
         <rect x="982" y="156" width="184" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="996" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Venue Dispatch</text>
-        <text id="live-t5" x="996" y="209" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">Direct · Proxy · Paper</text>
+        <text x="996" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Order Posting</text>
+        <text id="live-t5" x="996" y="209" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">on_create_order</text>
       </g>
 
       <!-- Bottom bracket -->
@@ -619,8 +626,8 @@ ticker->mark_order_to_be_created(engine, order, decision, strategy);`,
         t2: 'float[N] seq #411',
         t3: 'score 0.712',
         atom: '0.712',
-        t4: 'BUY 0.01 MARKET',
-        t5: 'Direct · Proxy · Paper',
+        t4: 'BUY 0.01 VALID',
+        t5: 'on_create_order',
         bar: '1m bar close 100420.50 · live BBA & books · PaperExchange prints',
         qDepth: 2,
       },
