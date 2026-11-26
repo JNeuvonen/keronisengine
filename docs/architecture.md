@@ -1,6 +1,18 @@
 # Architecture
 
-KeronisEngine is built as independent C++20 modules wired together at process startup. `trading_engine` has no dependency on live exchanges, PostgreSQL, or WebSockets; `market_data` can run inside `live_infra` or standalone; and `backtest_runner` and `historical_feature_gen` run completely offline against Parquet files.
+At a high level, KeronisEngine is three independent layers connected by thin seams:
+
+```mermaid
+flowchart LR
+    D["1. Data & Features<br/>(market_data)"] --> E["2. Core Engine & Strategies<br/>(trading_engine + ONNX)"]
+    E --> X["3. Execution<br/>(BacktestState / PaperExchange / Live Venues)"]
+```
+
+- **Data & Features (`market_data`)** ingests live WebSockets or Parquet files, maintains OHLCV datasets, and updates registered streaming C++ `StrategyStateMachine`s. It knows nothing about orders or accounts.
+- **Core Engine & Strategies (`trading_engine`)** holds order books (`RingBufferBook`), best bid/ask (BBA) caches, inventory, risk limits, and your registered strategy callbacks + ONNX inference. It knows nothing about live sockets, PostgreSQL, or NATS.
+- **Execution (`backtest_runner` or `live_infra`)** plugs into `Core::TradeTicker`: `BacktestTradeTicker` routes orders into `BacktestState` offline, while `LiveTradeTicker` routes orders through `Live::StateUpdater` to `PaperExchange`, native venue signers, or a proxy.
+
+The rest of this page is the deep dive for engineers who want to understand the exact threading, memory layout, and live runtime mechanics.
 
 ## Module boundaries
 

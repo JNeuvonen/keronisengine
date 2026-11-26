@@ -4,7 +4,7 @@
 
 ## 1. Start PostgreSQL and NATS
 
-`deploy/docker-compose.yml` starts PostgreSQL 16 and NATS bound to `127.0.0.1`. On first boot, Postgres loads `deploy/schema.sql` and seeds a paper account plus the `test_quoter` strategy (`version = '2.0'`, `backtest_json_format_version = '3.0'`) via `deploy/seed_paper_strategy.sql`:
+`deploy/docker-compose.yml` starts PostgreSQL 16 and NATS bound to `127.0.0.1`. On first boot, Postgres loads `deploy/schema.sql` and seeds a paper account plus the `test_quoter` strategy via `deploy/seed_paper_strategy.sql`:
 
 ```bash
 cd deploy

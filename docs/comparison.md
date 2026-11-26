@@ -1,18 +1,19 @@
 # Comparison
 
-| Dimension | KeronisEngine | NautilusTrader | HftBacktest |
+How KeronisEngine compares to the two most popular open-source alternatives:
+
+| | KeronisEngine | NautilusTrader | HftBacktest |
 |---|---|---|---|
-| Core language | C++20 (+ Rust Hyperliquid signer) | Rust core + Python/Cython API | Rust + Python (Numba) |
-| Strategy authoring | C++20 functions registered via `KERONIS_REGISTER_STRATEGY` | Python or Rust | Python (Numba) or Rust |
-| Feature & ML pipeline | C++ `StrategyStateMachine` shared across `historical_feature_gen`, `backtest_runner`, and `live_infra` + in-process ONNX Runtime | External / user-managed | External / user-managed |
-| Order book storage | `RingBufferBook` (tick-indexed 16B slots, bitmap + `__builtin_ctzll`, lazy mmap pages) | Level-based | HashMap / BTree / tick arrays |
-| Queue-position modeling | Queue notional (`order_queue_notional_accumulated`) for Polymarket; CEX backtests model latency, depth, and price-through rather than full L3 queue priority | L2/L3 fill models | Full L3 queue-position modeling |
-| Paper trading | `PaperExchange` (taker at `ack + latency`, maker against quotes + subsequent trades, cancels stop later prints) | Simulated / sandbox adapters | Backtest-focused + live connectors |
-| Native live venues | Hyperliquid, Aster, Polymarket; Lighter L2 market data; other venues via external proxy | Binance, Bybit, OKX, IBKR, Polymarket, others | Binance Futures, Bybit |
-| Live operational controls | Durable `QuoteHolds` + `quote_guard` heartbeat, localhost HTTP control server, `SIGTERM` quote pull | Risk engine and execution controls | Connector-dependent |
+| **Language** | C++20 (+ Rust Hyperliquid signer) | Rust core + Python API | Rust + Python (Numba) |
+| **Strategy authoring** | C++20 functions (no fork needed via `-DKERONIS_STRATEGY_DIRS`) | Python or Rust | Python (Numba) or Rust |
+| **ML & feature pipeline** | Built-in C++ streaming state machines shared across offline Parquet gen, backtest, and live + in-process ONNX Runtime | External / user-managed | External / user-managed |
+| **Paper / live parity** | Same strategy + state machine + ONNX code across backtest, `PaperExchange`, and live | Same `Strategy` / `Actor` class across backtest and live | Backtest-focused with live connectors |
+| **Queue-position modeling** | Polymarket queue-notional modeling; CEX backtests model latency, depth, and price-through | L2 / L3 fill models | Full L3 order queue-position modeling |
+| **Native live venues** | Hyperliquid, Aster, Polymarket (+ Lighter market data); other venues via external proxy | Binance, Bybit, OKX, IBKR, Polymarket, and more | Binance Futures, Bybit |
+| **Target footprint** | Full-exchange feeds (10k+ msg/s) + continuous ML inference on one ~$100 Linux box | Broad multi-asset platform | High-frequency market-making research |
 
-## Tradeoffs
+## When to use which
 
-- **KeronisEngine** is built for running full-exchange crypto feeds (10,000+ messages/sec across Binance) with streaming C++ feature state machines and continuous ONNX inference on a single ~$100 server, using the same C++ code offline and live. It is C++-only and does not bundle a Python strategy layer or a multi-exchange proxy.
-- **NautilusTrader** is a better fit if you want to write strategies in Python and need built-in adapters for a wide range of traditional and crypto venues.
-- **HftBacktest** is a better fit if your research depends on strict L3 queue-position simulation on CEX order books in Python/Numba or Rust.
+- **Use KeronisEngine** if you are comfortable in C++, want to ingest full-exchange crypto feeds with continuous ONNX inference on a single commodity server, and want your feature computation code to be identical between training and live trading.
+- **Use NautilusTrader** if you want to write strategies in Python and want turnkey adapters for a wide catalog of crypto and traditional brokers.
+- **Use HftBacktest** if your edge depends on strict L3 queue-position simulation on CEX order books and you prefer Python/Numba research notebooks.

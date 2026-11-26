@@ -1,5 +1,5 @@
 site_name: KeronisEngine
-site_description: C++20 trading engine with streaming state machines, ONNX inference, and live/backtest parity.
+site_description: Open-source C++20 trading engine. Focus on finding alpha; run market data, streaming features, ONNX inference, backtesting, and live execution on one ~$100 server.
 site_url: https://engine.keronis.ai/
 repo_url: https://github.com/JNeuvonen/keronisengine
 repo_name: JNeuvonen/keronisengine
@@ -44,14 +44,13 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - Overview: index.md
+  - Home: index.md
   - Quickstart: quickstart.md
-  - Concepts:
-      - Architecture: architecture.md
-      - Strategies: strategies.md
-      - State Machines & ONNX: state-machines.md
-      - Comparison: comparison.md
-  - Operations:
-      - Live & Paper Trading: live-and-paper.md
+  - Strategies: strategies.md
+  - State Machines & ONNX: state-machines.md
+  - Architecture: architecture.md
+  - Live & Paper: live-and-paper.md
+  - Comparison: comparison.md
+  - Reference:
       - Control Server API: control-server.md
       - Configuration: configuration.md

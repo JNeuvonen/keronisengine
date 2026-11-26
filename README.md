@@ -4,11 +4,13 @@
 [![Docs](https://github.com/JNeuvonen/keronisengine/actions/workflows/pages.yml/badge.svg)](https://engine.keronis.ai/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-KeronisEngine is a C++20 trading engine with streaming feature state machines and in-process ONNX Runtime inference. The same strategy functions and state machines run in offline feature generation (`historical_feature_gen`), event-driven backtesting (`backtest_runner`), paper trading (`PaperExchange`), and live trading (`live_infra`).
+**Focus on finding alpha. Let KeronisEngine handle the execution.**
 
-In production it ingests full-exchange crypto feeds (10,000+ messages/sec across Binance) while running streaming state machines and continuous ONNX predictions on a single ~$100 dedicated server.
+KeronisEngine is a C++20 trading engine with streaming feature state machines and in-process ONNX Runtime inference. Write a strategy and its features once in C++, then run the same code in offline feature generation (`historical_feature_gen`), event-driven backtesting (`backtest_runner`), paper trading (`PaperExchange`), and live trading (`live_infra`).
 
-Documentation: [engine.keronis.ai](https://engine.keronis.ai/) (plain Markdown bundle for tools/agents: [llms.txt](https://engine.keronis.ai/llms.txt), [llms-full.txt](https://engine.keronis.ai/llms-full.txt)).
+In production it ingests all of Binance's live market data (10,000+ messages/sec) while updating order books, computing streaming features, and scoring ONNX models on a single ~$100 dedicated server.
+
+Documentation: [engine.keronis.ai](https://engine.keronis.ai/) (plain Markdown bundle for scripts/agents: [llms.txt](https://engine.keronis.ai/llms.txt), [llms-full.txt](https://engine.keronis.ai/llms-full.txt)).
 
 ## Packages
 
