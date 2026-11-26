@@ -6,7 +6,7 @@ const steps = [
     idx: 0,
     col: 0,
     headline: 'MarketDataStreams parses raw wire JSON via simdjson & fans out',
-    sync: 'DataRecorder · BarAggregator (OHLCV) · sm_queue_ · live_event_queue_',
+    sync: 'Feeds BarAggregator, StateMachineDispatcher, DataRecorder & live_event_queue_',
     dataTitle: 'Raw Binance Futures Wire Frame (btcusdt@trade)',
     data: `{
   "e": "trade",
@@ -30,8 +30,25 @@ live_event_callback_(std::move(ev));`,
   {
     idx: 1,
     col: 1,
+    headline: 'BarAggregator builds live OHLCV bars in parallel with Feature SMs',
+    sync: 'BarAggregator::add_trade() → OhlcvDataset (time / volume bars)',
+    dataTitle: 'OhlcvDataset Bar State (readable by T3 & T4)',
+    data: `bar_policy:  time_bars(60'000 ms)  // or volume / custom bars
+ohlcv_tick:  { open: 100412.0, high: 100421.0, low: 100410.5, close: 100420.5 }
+volume:      48.62 BTC  (taker_buy_vol: 31.40 BTC)
+consumers:   compute_predictions_callback & strategy_callback`,
+    links: [
+      { label: 'market_data_streams.cpp:1428', href: `${GH}/src/cpp/packages/market_data/src/market_data_streams.cpp#L1428` },
+      { label: 'bar_close_policy.h', href: `${GH}/src/cpp/packages/market_data/include/market_data/bar_close_policy.h` },
+    ],
+    code: `BarAggregator::getInstance().add_trade(trade, true);
+// Strategies declare required_bar_types and read OhlcvDataset directly`,
+  },
+  {
+    idx: 2,
+    col: 1,
     headline: 'Dedicated SM thread updates your compiled C++ feature state',
-    sync: 'Shared C++ code between offline feature generation and live trading',
+    sync: 'StateMachineDispatcher::consumer_loop · shared offline & live C++',
     dataTitle: 'YourFeatureSM::emit_state() -> vector<float>',
     data: `// Plug in any StrategyStateMachine (out-of-tree via -DKERONIS_STRATEGY_DIRS)
 emit_state() -> float[N] {
@@ -51,13 +68,13 @@ for (auto& sm : snapshot) {
 }`,
   },
   {
-    idx: 2,
+    idx: 3,
     col: 2,
     headline: 'Prediction callback runs on predictions_pool & stores atomic signal',
     sync: 'compute_predictions_callback (ONNX or custom C++ model) → atomic_signal_main',
     dataTitle: 'compute_predictions_callback → AtomicSignal',
     data: `callback:           compute_predictions_callback (async pool)
-inputs:             sm->emit_state() + latest OhlcvDataset bars
+inputs:             sm->emit_state() and/or OhlcvDataset bars
 runtime:            ONNX Runtime C++ session (or custom pricer)
 atomic_signal_main: store(0.712f, 1732632012418)`,
     links: [
@@ -68,7 +85,7 @@ atomic_signal_main: store(0.712f, 1732632012418)`,
 ticker->atomic_signal_main.store(score, now_ms);`,
   },
   {
-    idx: 3,
+    idx: 4,
     col: 3,
     headline: 'Execution callback reads signal, bars & books and returns StrategyDecision',
     sync: 'strategy_callback · trading_mutex → construct_order() → enqueue_order_task()',
@@ -86,7 +103,7 @@ auto [score, ts] = ticker->atomic_signal_main.load();
 StrategyHelpers::submit_market_order(..., decision);`,
   },
   {
-    idx: 4,
+    idx: 5,
     col: 4,
     headline: 'Dedicated order_thread_pool (200) & cancel pool (100) post to venues',
     sync: 'enqueue_order_task (200w) · enqueue_cancel_order_task (100w) · non-blocking',
@@ -114,19 +131,19 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
       <span><i class="dot dot-atom"></i>Atomic register</span>
     </div>
     <div class="ep-ctrl">
-      <span class="ep-step-num" id="ep-counter">Stage 1 / 5</span>
+      <span class="ep-step-num" id="ep-counter">Stage 1 / 6</span>
       <button type="button" class="ep-btn" id="ep-prev" aria-label="Previous stage">←</button>
       <button type="button" class="ep-btn" id="ep-next" aria-label="Next stage">→</button>
       <button type="button" class="ep-btn ep-play" id="ep-play">Pause</button>
     </div>
   </div>
 
-  <!-- Open 5-column vertical thread-swimlane illustration (2 lines max per box) -->
+  <!-- 5-column vertical swimlanes with parallel BarAggregator + Feature SM stacked in Column 2 -->
   <div class="ep-stage">
     <svg
-      viewBox="0 0 1180 356"
+      viewBox="0 0 1180 370"
       role="img"
-      aria-label="Vertical thread swimlane visualization showing raw Binance trade ticks fanning out to BarAggregator, DataRecorder, live_event_consumer, and directly into StateMachineDispatcher, with OHLCV bars and books feeding both predictions_pool and strategy_pool"
+      aria-label="Vertical thread swimlane visualization showing raw trade ticks fanning out in parallel to BarAggregator (OHLCV) and StateMachineDispatcher (Feature SM), then converging asynchronously into Prediction Callback, Execution Callback, and the 200-worker Order Posting Pool"
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>
@@ -142,24 +159,24 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
       </defs>
 
       <!-- 5 Vertical Thread Swimlane Backgrounds -->
-      <rect class="col-bg" data-col="0" x="0" y="0" width="206" height="308" fill="transparent" />
-      <rect class="col-bg" data-col="1" x="242" y="0" width="206" height="308" fill="transparent" />
-      <rect class="col-bg" data-col="2" x="484" y="0" width="206" height="308" fill="transparent" />
-      <rect class="col-bg" data-col="3" x="726" y="0" width="206" height="308" fill="transparent" />
-      <rect class="col-bg" data-col="4" x="968" y="0" width="212" height="308" fill="transparent" />
+      <rect class="col-bg" data-col="0" x="0" y="0" width="206" height="320" fill="transparent" />
+      <rect class="col-bg" data-col="1" x="242" y="0" width="206" height="320" fill="transparent" />
+      <rect class="col-bg" data-col="2" x="484" y="0" width="206" height="320" fill="transparent" />
+      <rect class="col-bg" data-col="3" x="726" y="0" width="206" height="320" fill="transparent" />
+      <rect class="col-bg" data-col="4" x="968" y="0" width="212" height="320" fill="transparent" />
 
       <!-- Vertical thread boundary hairlines -->
-      <line x1="224" y1="8" x2="224" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="466" y1="8" x2="466" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="708" y1="8" x2="708" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
-      <line x1="950" y1="8" x2="950" y2="306" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="224" y1="8" x2="224" y2="318" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="466" y1="8" x2="466" y2="318" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="708" y1="8" x2="708" y2="318" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="950" y1="8" x2="950" y2="318" stroke="#1b222e" stroke-width="1" stroke-dasharray="3 4" />
 
       <!-- Thread Column Headers -->
       <text x="14" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T1 · MarketDataStreams</text>
       <text x="14" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">WS I/O + simdjson</text>
 
-      <text x="256" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Feature SM</text>
-      <text x="256" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">StateMachineDispatcher</text>
+      <text x="256" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Bars &amp; Feature SMs</text>
+      <text x="256" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">Parallel state layers</text>
 
       <text x="498" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · predictions_pool</text>
       <text x="498" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">hardware_concurrency()</text>
@@ -170,103 +187,107 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
       <text x="982" y="24" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · order_thread_pool</text>
       <text x="982" y="40" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="10">200 create · 100 cancel</text>
 
-      <!-- CONCURRENT UPPER FAN-OUT: T1 -> BarAggregator (OhlcvDataset) / DataRecorder / live_event_consumer -> T3 & T4 -->
-      <path d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#222c3c" stroke-width="1.4" />
-      <path class="async-pulse" d="M 103 156 L 103 94 L 256 94" fill="none" stroke="#60a5fa" stroke-width="1.6" marker-end="url(#arr-queue)" />
+      <!-- FORK FROM COL 0 -> PARALLEL COL 1 TOP (BarAggregator) & COL 1 BOTTOM (Feature SM) -->
+      <!-- Upper fork: Raw Trade -> BarAggregator -->
+      <path d="M 192 182 L 214 182 L 214 118 L 254 118" fill="none" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <path class="flow-beam" data-beam="0" d="M 192 182 L 214 182 L 214 118 L 250 118" fill="none" stroke="#cbd5e1" stroke-width="2" />
 
-      <!-- Concurrent state bar spanning T2..T3 -->
-      <rect x="256" y="72" width="420" height="44" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.16)" stroke-width="1.1" />
-      <text x="272" y="91" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">
-        BarAggregator (OhlcvDataset) · DataRecorder · live_event_consumer
-      </text>
-      <text id="live-bar" x="272" y="107" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">
-        1m bar close 100420.50 · live BBA &amp; books · PaperExchange prints
-      </text>
-
-      <!-- Tap 1: OHLCV bars & books -> T3 predictions_pool (compute_predictions_callback) -->
-      <path d="M 587 116 L 587 152" fill="none" stroke="#222c3c" stroke-width="1.4" />
-      <path class="async-pulse" d="M 587 116 L 587 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
-
-      <!-- Tap 2: OHLCV bars & books -> T4 strategy_pool (strategy_callback) -->
-      <path d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#222c3c" stroke-width="1.4" />
-      <path class="async-pulse" d="M 676 94 L 829 94 L 829 152" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
-
-      <!-- MAIN LEFT-TO-RIGHT HANDOFFS -->
-      <!-- Handoff 0->1: sm_queue_ with animated 3-slot ring buffer -->
-      <line x1="192" y1="192" x2="254" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
-      <line class="flow-beam" data-beam="0" x1="192" y1="192" x2="250" y2="192" stroke="#60a5fa" stroke-width="2" />
-      <g class="q-glyph" transform="translate(206, 182)">
+      <!-- Lower fork: Raw Trade -> sm_queue_ -> Feature SM -->
+      <path d="M 192 182 L 214 182 L 214 246 L 254 246" fill="none" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
+      <path class="flow-beam" data-beam="1" d="M 192 182 L 214 182 L 214 246 L 250 246" fill="none" stroke="#60a5fa" stroke-width="2" />
+      <!-- Discrete sm_queue_ ring buffer glyph on lower fork -->
+      <g class="q-glyph" transform="translate(206, 236)">
         <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
         <rect id="q-s0" x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
         <rect id="q-s1" x="14" y="4" width="7" height="12" rx="1" fill="#60a5fa" opacity="0.5" />
         <rect id="q-s2" x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
       </g>
-      <text x="224" y="256" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">sm_queue_</text>
-      <text x="224" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">lock-free MPSC</text>
+      <text x="224" y="294" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10">sm_queue_</text>
 
-      <!-- Handoff 1->2: emit_state() -->
-      <line x1="434" y1="192" x2="496" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
-      <line class="flow-beam" data-beam="1" x1="434" y1="192" x2="492" y2="192" stroke="#cbd5e1" stroke-width="2" />
-      <text x="466" y="256" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">emit_state()</text>
-      <text x="466" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">float[N]</text>
+      <!-- CONVERGENCE FROM PARALLEL COL 1 -> COL 2 (Prediction Callback) + DIRECT BAR TAP -> COL 3 (Execution Callback) -->
+      <!-- From BarAggregator (Top) -> Prediction Callback (Col 2) -->
+      <path d="M 434 118 L 466 118 L 466 170 L 496 170" fill="none" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <path class="flow-beam" data-beam="2" d="M 434 118 L 466 118 L 466 170 L 492 170" fill="none" stroke="#cbd5e1" stroke-width="2" />
 
-      <!-- Handoff 2->3: atomic_signal_main -->
-      <line x1="676" y1="192" x2="738" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-atom)" />
-      <line class="flow-beam" data-beam="2" x1="676" y1="192" x2="734" y2="192" stroke="#d4a359" stroke-width="2.2" />
-      <g class="atom-glyph" transform="translate(683, 179)">
+      <!-- Upper bypass: OhlcvDataset & live books -> Execution Callback (Col 3) -->
+      <path d="M 466 118 L 466 72 L 829 72 L 829 144" fill="none" stroke="#222c3c" stroke-width="1.4" />
+      <path class="async-pulse" d="M 466 118 L 466 72 L 829 72 L 829 144" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <text x="650" y="63" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">
+        OhlcvDataset bars &amp; live books readable by both callbacks
+      </text>
+
+      <!-- From Feature SM (Bottom) -> Prediction Callback (Col 2) -->
+      <path d="M 434 246 L 466 246 L 466 194 L 496 194" fill="none" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <path class="flow-beam" data-beam="3" d="M 434 246 L 466 246 L 466 194 L 492 194" fill="none" stroke="#cbd5e1" stroke-width="2" />
+      <text x="466" y="294" text-anchor="middle" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10">emit_state()</text>
+
+      <!-- HANDOFF COL 2 -> COL 3: atomic_signal_main -->
+      <line x1="676" y1="182" x2="738" y2="182" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-atom)" />
+      <line class="flow-beam" data-beam="4" x1="676" y1="182" x2="734" y2="182" stroke="#d4a359" stroke-width="2.2" />
+      <g class="atom-glyph" transform="translate(683, 169)">
         <rect x="0" y="0" width="50" height="26" rx="2" fill="#15120b" stroke="#d4a359" stroke-width="1.3" />
         <text id="live-atom" x="25" y="17" text-anchor="middle" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10" font-weight="600">0.712</text>
       </g>
-      <text x="708" y="256" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="10.5">atomic_signal</text>
-      <text x="708" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">store / load</text>
+      <text x="708" y="294" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="10">atomic_signal</text>
 
-      <!-- Handoff 3->4: order_thread_pool task queue -->
-      <line x1="918" y1="192" x2="980" y2="192" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
-      <line class="flow-beam" data-beam="3" x1="918" y1="192" x2="976" y2="192" stroke="#60a5fa" stroke-width="2" />
-      <g class="q-glyph" transform="translate(932, 182)">
+      <!-- HANDOFF COL 3 -> COL 4: order_thread_pool queue -->
+      <line x1="918" y1="182" x2="980" y2="182" stroke="#283446" stroke-width="1.6" marker-end="url(#arr-queue)" />
+      <line class="flow-beam" data-beam="5" x1="918" y1="182" x2="976" y2="182" stroke="#60a5fa" stroke-width="2" />
+      <g class="q-glyph" transform="translate(932, 172)">
         <rect x="0" y="0" width="36" height="20" rx="2" fill="#0b1220" stroke="#60a5fa" stroke-opacity="0.7" stroke-width="1.2" />
         <rect x="4" y="4" width="7" height="12" rx="1" fill="#60a5fa" />
         <rect x="14" y="4" width="7" height="12" rx="1" fill="#1e293b" />
         <rect x="24" y="4" width="7" height="12" rx="1" fill="#1e293b" />
       </g>
-      <text x="950" y="256" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10.5">order_queue</text>
-      <text x="950" y="271" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9.5">enqueue_order_task</text>
+      <text x="950" y="294" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="10">order_queue</text>
 
-      <!-- 5 COMPACT STAGE NODES — STRICTLY 2 LINES PER BOX -->
+      <!-- 6 COMPACT STAGE NODES — STRICTLY 2 LINES PER BOX -->
+      <!-- Node 0 (Col 0): Raw Trade -->
       <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Raw Trade ingest">
-        <rect x="14" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="28" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Raw Trade</text>
-        <text id="live-t1" x="28" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">100420.50 · 1.85 BUY</text>
+        <rect x="14" y="146" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="28" y="175" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Raw Trade</text>
+        <text id="live-t1" x="28" y="199" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">100420.50 · 1.85 BUY</text>
       </g>
 
-      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: User-defined Feature SM">
-        <rect x="256" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="270" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Feature SM</text>
-        <text id="live-t2" x="270" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">float[N] seq #411</text>
+      <!-- Node 1 (Col 1 Top): BarAggregator (OHLCV) -->
+      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: BarAggregator OHLCV">
+        <rect x="256" y="82" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="270" y="111" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">BarAggregator</text>
+        <text id="live-bar" x="270" y="135" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">1m close 100420.50</text>
       </g>
 
-      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: Strategy Prediction Callback">
-        <rect x="498" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="512" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Prediction Callback</text>
-        <text id="live-t3" x="512" y="209" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score 0.712</text>
+      <!-- Node 2 (Col 1 Bottom): Feature SM -->
+      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: User-defined Feature SM">
+        <rect x="256" y="210" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="270" y="239" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Feature SM</text>
+        <text id="live-t2" x="270" y="263" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">float[N] seq #411</text>
       </g>
 
-      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy Execution Callback">
-        <rect x="740" y="156" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="754" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Execution Callback</text>
-        <text id="live-t4" x="754" y="209" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 VALID</text>
+      <!-- Node 3 (Col 2): Prediction Callback -->
+      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: Strategy Prediction Callback">
+        <rect x="498" y="146" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="512" y="175" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Prediction Callback</text>
+        <text id="live-t3" x="512" y="199" fill="#f3d092" font-family="IBM Plex Mono, monospace" font-size="10.5">score 0.712</text>
       </g>
 
-      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Order Posting Pool">
-        <rect x="982" y="156" width="184" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
-        <text x="996" y="185" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Order Posting</text>
-        <text id="live-t5" x="996" y="209" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">on_create_order</text>
+      <!-- Node 4 (Col 3): Execution Callback -->
+      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Strategy Execution Callback">
+        <rect x="740" y="146" width="178" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="754" y="175" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Execution Callback</text>
+        <text id="live-t4" x="754" y="199" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10.5">BUY 0.01 VALID</text>
+      </g>
+
+      <!-- Node 5 (Col 4): Order Posting -->
+      <g class="ep-node" data-node="5" role="button" tabindex="0" aria-label="Stage 6: Order Posting Pool">
+        <rect x="982" y="146" width="184" height="72" rx="3" fill="#0b0f16" stroke="rgba(148,163,184,0.14)" stroke-width="1.2" />
+        <text x="996" y="175" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="13.5" font-weight="600">Order Posting</text>
+        <text id="live-t5" x="996" y="199" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">on_create_order</text>
       </g>
 
       <!-- Bottom bracket -->
-      <path d="M 14 306 L 14 318 L 1166 318 L 1166 306" fill="none" stroke="#222c3c" stroke-width="1.2" />
-      <text x="590" y="340" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
-        &lt;1 ms tick → features → inference → order · T3 (ONNX) and T4 (Strategy) read latest bars, books &amp; features asynchronously
+      <path d="M 14 322 L 14 334 L 1166 334 L 1166 322" fill="none" stroke="#222c3c" stroke-width="1.2" />
+      <text x="590" y="356" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
+        &lt;1 ms tick → features → inference → order · strategies read OHLCV bars, Feature SMs, or both asynchronously
       </text>
     </svg>
   </div>
@@ -391,7 +412,7 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
   }
 
   .ep-stage {
-    padding: 1.2rem 0 0.4rem;
+    padding: 1.1rem 0 0.4rem;
     overflow-x: auto;
   }
 
@@ -578,67 +599,70 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
     const playBtn = document.getElementById('ep-play');
 
     const elT1 = document.getElementById('live-t1');
+    const elBar = document.getElementById('live-bar');
     const elT2 = document.getElementById('live-t2');
     const elT3 = document.getElementById('live-t3');
     const elAtom = document.getElementById('live-atom');
     const elT4 = document.getElementById('live-t4');
     const elT5 = document.getElementById('live-t5');
-    const elBar = document.getElementById('live-bar');
     const qSlots = [
       document.getElementById('q-s0'),
       document.getElementById('q-s1'),
       document.getElementById('q-s2'),
     ];
 
+    // Map each of the 6 stages to its vertical column index (stages 1 & 2 share Col 1)
+    const stageCols = [0, 1, 1, 2, 3, 4];
+
     const frames = [
       {
         t1: '100418.00 · 0.42 SELL',
+        bar: '1m close 100418.00',
         t2: 'float[N] seq #408',
         t3: 'score 0.584',
         atom: '0.584',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
-        bar: '1m bar close 100418.00 · live BBA & books · PaperExchange prints',
         qDepth: 1,
       },
       {
         t1: '100419.50 · 0.90 BUY',
+        bar: '1m close 100419.50',
         t2: 'float[N] seq #409',
-        t3: 'score 0.584', // async: ONNX has not re-scored on this tick
+        t3: 'score 0.584',
         atom: '0.584',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
-        bar: '1m bar close 100419.50 · live BBA & books · PaperExchange prints',
         qDepth: 2,
       },
       {
         t1: '100420.00 · 0.65 BUY',
+        bar: '1m close 100420.00',
         t2: 'float[N] seq #410',
         t3: 'score 0.641',
         atom: '0.641',
         t4: 'HOLD (< 0.650)',
         t5: 'idle',
-        bar: '1m bar close 100420.00 · live BBA & books · PaperExchange prints',
         qDepth: 3,
       },
       {
         t1: '100420.50 · 1.85 BUY',
+        bar: '1m close 100420.50',
         t2: 'float[N] seq #411',
         t3: 'score 0.712',
         atom: '0.712',
         t4: 'BUY 0.01 VALID',
         t5: 'on_create_order',
-        bar: '1m bar close 100420.50 · live BBA & books · PaperExchange prints',
         qDepth: 2,
       },
       {
         t1: '100421.00 · 0.30 BUY',
+        bar: '1m close 100421.00',
         t2: 'float[N] seq #412',
         t3: 'score 0.712',
         atom: '0.712',
-        t4: 'ORDER VALID',
+        t4: 'BUY 0.01 VALID',
         t5: 'SUBMITTED',
-        bar: '1m bar close 100421.00 · live BBA & books · PaperExchange prints',
         qDepth: 1,
       },
     ];
@@ -650,12 +674,12 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
     function applyFrame(fi) {
       const f = frames[fi % frames.length];
       if (elT1) elT1.textContent = f.t1;
+      if (elBar) elBar.textContent = f.bar;
       if (elT2) elT2.textContent = f.t2;
       if (elT3) elT3.textContent = f.t3;
       if (elAtom) elAtom.textContent = f.atom;
       if (elT4) elT4.textContent = f.t4;
       if (elT5) elT5.textContent = f.t5;
-      if (elBar) elBar.textContent = f.bar;
       qSlots.forEach((slot, i) => {
         if (!slot) return;
         const filled = i < f.qDepth;
@@ -669,14 +693,22 @@ proxy / sim: cpp_live_proxy (CCXT · IBKR) · PaperExchange · BacktestState`,
       root.dataset.step = String(current);
       if (counter) counter.textContent = `Stage ${current + 1} / ${nodes.length}`;
 
-      cols.forEach((c, i) => c.classList.toggle('is-active', i === current));
+      const activeCol = stageCols[current];
+      cols.forEach((c, i) => c.classList.toggle('is-active', i === activeCol));
       nodes.forEach((n, i) => n.classList.toggle('is-active', i === current));
-      beams.forEach((b, i) => {
-        b.classList.toggle('is-active', i === current - 1 || (current === 0 && i === 0));
-      });
-      asyncPulses.forEach((p) => {
-        p.classList.toggle('is-active', current === 0 || current === 2 || current === 3);
-      });
+
+      // Activate beams corresponding to the active stage
+      const beamMap = {
+        0: [0, 1],
+        1: [0, 2],
+        2: [1, 3],
+        3: [2, 3],
+        4: [4],
+        5: [5],
+      };
+      const activeBeams = beamMap[current] || [];
+      beams.forEach((b, i) => b.classList.toggle('is-active', activeBeams.includes(i)));
+      asyncPulses.forEach((p) => p.classList.toggle('is-active', current === 1 || current === 4));
       panels.forEach((p, i) => p.classList.toggle('is-active', i === current));
     }
 
