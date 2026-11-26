@@ -24,7 +24,16 @@ docker run --rm ghcr.io/jneuvonen/keronisengine:latest \
 - Rust toolchain (`cargo`) for the Hyperliquid order signer crate (`src/rust/hyperliquid_signer`)
 - Python 3 with `pyarrow` in a virtualenv (only used by `examples/quickstart_backtest/generate_sample_data.py`)
 
-### Compile
+### Compile & test
+
+With `VCPKG_ROOT` exported (or system dependencies installed), `make test` fetches ONNX Runtime, configures CMake/Ninja, compiles all six binaries, and runs the unit tests:
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+make test
+```
+
+Or invoke CMake directly:
 
 ```bash
 export VCPKG_ROOT=/path/to/vcpkg

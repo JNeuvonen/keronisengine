@@ -980,7 +980,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
         <div class="cmd-bar">
           <span class="ps">$</span>
-          <code id="docker-cmd">docker run --rm ghcr.io/jneuvonen/keronisengine:latest trading_engine_tests</code>
+          <code id="build-cmd">git clone https://github.com/JNeuvonen/keronisengine &amp;&amp; cd keronisengine &amp;&amp; make test</code>
           <button type="button" class="copy-btn" id="copy-cmd">Copy</button>
         </div>
       </section>
@@ -1437,7 +1437,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
     <script>
       const copyBtn = document.getElementById('copy-cmd');
-      const cmdEl = document.getElementById('docker-cmd');
+      const cmdEl = document.getElementById('build-cmd');
       copyBtn?.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(cmdEl?.textContent || '');
