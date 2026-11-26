@@ -3,6 +3,7 @@ build/
 .git/
 third_party/
 site/
+website/
 deploy/.env
 deploy/accounts.json
 src/rust/hyperliquid_signer/target/

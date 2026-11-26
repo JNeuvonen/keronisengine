@@ -18,15 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: pnpm/action-setup@v4
         with:
-          python-version: "3.12"
-      - run: pip install mkdocs-material
-      - run: mkdocs build --strict
-      - run: python3 scripts/build_llms_full.py site/llms-full.txt
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - run: python3 scripts/sync_website_docs.py
+      - run: pnpm --dir website install --frozen-lockfile
+      - run: pnpm --dir website build
+      - run: python3 scripts/build_llms_full.py website/dist/llms-full.txt
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: website/dist
 
   deploy:
     environment:
