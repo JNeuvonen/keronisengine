@@ -3,18 +3,22 @@ const steps = [
   {
     idx: 0,
     col: 0,
-    headline: 'Socket thread parses wire frame & enqueues lock-free',
-    sync: 'live_event_queue_ (BlockingConcurrentQueue) · non-blocking I/O',
-    dataTitle: 'Inbound MarketEvent::TRADE',
+    headline: 'Socket thread parses raw wire JSON via simdjson & enqueues lock-free',
+    sync: 'NormalizedParsedTrade::from_simdjson() → live_event_queue_',
+    dataTitle: 'Raw Binance Futures Wire Frame (btcusdt@trade)',
     data: `{
-  "symbol_key": "BTCUSDT:binance:swap",
-  "price": 100420.50,
-  "qty": 1.85,
-  "is_buyer_maker": false,
-  "timestamp_ms": 1732632012418
+  "e": "trade",
+  "E": 1732632012418,
+  "T": 1732632012416,
+  "s": "BTCUSDT",
+  "t": 5481920411,
+  "p": "100420.50",
+  "q": "1.85",
+  "m": false
 }`,
-    sourceRef: 'state_updater.cpp:936',
-    code: `live_event_queue_.enqueue(std::move(event));`,
+    sourceRef: 'normalized_trade.cpp:59 · state_updater.cpp:936',
+    code: `auto trade = NormalizedParsedTrade::from_simdjson(el, "binance", "swap");
+live_event_queue_.enqueue(std::move(event));`,
   },
   {
     idx: 1,
