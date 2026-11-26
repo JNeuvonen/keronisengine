@@ -1182,14 +1182,13 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
       </section>
 
-      <!-- Step-by-Step Thread Model & Execution Trace -->
+      <!-- The Execution Path -->
       <section class="band">
         <div class="sec-head">
-          <div class="kicker">Thread Model</div>
-          <h2>How a tick crosses threads, queues, and atomics</h2>
+          <h2>The execution path.</h2>
           <p class="sec-desc">
-            Five concurrent thread lanes decoupled by lock-free queues and atomics—so socket reads,
-            feature updates, ONNX scoring, and order execution never block each other.
+            Five concurrent threads decoupled by lock-free queues and atomics, progressing strictly
+            left to right from wire arrival to order dispatch.
           </p>
         </div>
 

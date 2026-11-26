@@ -2,484 +2,535 @@
 const steps = [
   {
     idx: 0,
-    lane: 0,
-    thread: 'MarketDataStreams (WS I/O thread)',
-    sync: 'Lock-free enqueue → live_event_queue_',
-    title: '1. Parse wire frame & enqueue without blocking I/O',
-    desc: 'The venue WebSocket thread parses the incoming frame into a normalized MarketData::MarketEvent and pushes it onto StateUpdater::live_event_queue_ (moodycamel::BlockingConcurrentQueue). Socket reads never wait on order books, feature math, or model inference.',
-    trace: [
-      '// state_updater.cpp:936',
-      'MarketEvent ev = parse_trade_frame(raw_ws);',
-      '// symbol_key="BTCUSDT:binance:swap" px=100420.50 qty=1.85',
-      'live_event_queue_.enqueue(std::move(ev));',
-    ],
+    col: 0,
+    headline: 'Socket thread parses wire frame & enqueues lock-free',
+    sync: 'live_event_queue_ (BlockingConcurrentQueue) · non-blocking I/O',
+    dataTitle: 'Inbound MarketEvent::TRADE',
+    data: `{
+  "symbol_key": "BTCUSDT:binance:swap",
+  "price": 100420.50,
+  "qty": 1.85,
+  "is_buyer_maker": false,
+  "timestamp_ms": 1732632012418
+}`,
+    sourceRef: 'state_updater.cpp:936',
+    code: `live_event_queue_.enqueue(std::move(event));`,
   },
   {
     idx: 1,
-    lane: 1,
-    thread: 'StateUpdater::live_event_consumer_loop',
-    sync: 'wait_dequeue_timed → book update + lock-free fan-out',
-    title: '2. Update order books & fan out to StateMachineDispatcher',
-    desc: 'A dedicated consumer thread drains live_event_queue_, updates RingBufferBook / BBA / spot prices inside Core::Engine, and fans out the event to StateMachineDispatcher::queue_ (and to PaperExchange on paper strategies).',
-    trace: [
-      '// state_updater.cpp:4070, 4221',
-      'live_event_queue_.wait_dequeue_timed(ev, ...);',
-      'engine.update_price_and_book(ev);',
-      'StateMachineDispatcher::get_instance().enqueue(ev);',
-    ],
+    col: 1,
+    headline: 'Consumer updates order book & fans out asynchronously',
+    sync: 'RingBufferBook (~1.5 ns/op) + StateMachineDispatcher::enqueue()',
+    dataTitle: 'Concurrent Fan-out',
+    data: `book.apply_bid(tick_idx, qty)       // ~1.5 ns/op (Core Ultra 9 285K)
+engine.update_price("BTCUSDT", px)  // visible to Strategy Pool immediately
+sm_dispatcher.enqueue(event)        // lock-free handoff to SM thread`,
+    sourceRef: 'state_updater.cpp:4070, 4221',
+    code: `live_event_queue_.wait_dequeue_timed(event, ...);
+StateMachineDispatcher::get_instance().enqueue(MarketEvent(event));`,
   },
   {
     idx: 2,
-    lane: 2,
-    thread: 'StateMachineDispatcher::consumer_loop',
-    sync: 'Dedicated SM thread · shared offline/live C++ class',
-    title: '3. Update streaming features in compiled C++',
-    desc: 'The state-machine thread drains its own lock-free queue and calls sm->react(ev) on every registered StrategyStateMachine. Shared C++ code between offline Parquet feature generation and live trading—never blocks WebSocket I/O or order routing.',
-    trace: [
-      '// state_machine_dispatcher.cpp:64 -> windowed_taker_flow_sm.cpp',
-      'sm->react(ev);  // expires stale 1s buckets, accumulates notional',
-      '// emit_state() -> [0.780f, 14.0f, 185778.0f, 52400.0f, 0.412f]',
-    ],
+    col: 2,
+    headline: 'Dedicated SM thread updates rolling C++ feature state',
+    sync: 'Versioned lock-free machine snapshot · shared offline & live C++',
+    dataTitle: 'WindowedTakerFlowSM::emit_state()',
+    data: `bucket[ts_sec % 3600].buy_volume += 100420.50 * 1.85
+emit_state() -> float[5] {
+  buy_ratio_5s:       0.780f,
+  trade_count_5s:     14.0f,
+  buy_volume_5s:      185778.0f,
+  sell_volume_5s:     52400.0f,
+  vol_ratio_5s_30s:   0.412f
+}`,
+    sourceRef: 'state_machine_dispatcher.cpp:64 · windowed_taker_flow_sm.cpp:65',
+    code: `for (auto& sm : snapshot) sm->react(event);`,
   },
   {
     idx: 3,
-    lane: 3,
-    thread: 'Core::Engine::generate_predictions_thread_pool',
-    sync: 'Worker pool (hardware_concurrency) → atomic store',
-    title: '4. Score ONNX model in-process & publish lock-free signal',
-    desc: 'generate_predictions_loop dispatches compute_predictions_callback across worker threads. The callback reads sm->emit_state(), runs OnnxModel::predict(*features) in-process, and writes the score lock-free to ticker->atomic_signal_main.',
-    trace: [
-      '// engine.cpp:130, 728 -> binance_onnx_perp.cpp:34',
-      'auto features = sm->emit_state();',
-      'float score = model->predict(*features);  // 0.712f (in-process)',
-      'ticker->atomic_signal_main.store(score, now_ms);',
-    ],
+    col: 3,
+    headline: 'Worker pool scores ONNX in-process & stores atomic signal',
+    sync: 'In-flight guarded pool (hardware_concurrency) → atomic_signal_main',
+    dataTitle: 'OnnxModel::predict() → AtomicSignal',
+    data: `model:              "taker_flow_v1.onnx"  (in-process C++ session)
+input_tensor:       float[1, 5]
+predicted_score:    0.712f  (> 0.650f entry threshold)
+atomic_signal_main: store(0.712f, 1732632012418)`,
+    sourceRef: 'engine.cpp:728 · binance_onnx_perp.cpp:34',
+    code: `float score = model->predict(*features);
+ticker->atomic_signal_main.store(score, now_ms);`,
   },
   {
     idx: 4,
-    lane: 4,
-    thread: 'Core::Engine::strategy_thread_pool',
-    sync: 'std::lock_guard<std::mutex>(ticker->trading_mutex)',
-    title: '5. Evaluate strategy & enforce risk gates',
-    desc: 'generate_strategy_decisions_loop dispatches strategy_callback across worker threads. The strategy locks ticker->trading_mutex, reads atomic_signal_main.load() + current book, and constructs an order through construct_order() (exposure caps, rate limits, quote holds).',
-    trace: [
-      '// engine.cpp:134, 871 -> binance_onnx_perp.cpp:57',
-      'std::lock_guard lock(ticker->trading_mutex);',
-      'auto [score, ts] = ticker->atomic_signal_main.load(); // 0.712f > 0.65f',
-      'auto [res, ord] = ticker->construct_order(engine, strategy, params); // VALID',
-    ],
-  },
-  {
-    idx: 5,
-    lane: 4,
-    thread: 'Core::TradeTicker execution seam',
-    sync: 'Direct signer · cpp_live_proxy · PaperExchange · BacktestState',
-    title: '6. Dispatch validated order to venue backend',
-    desc: 'The constructed Core::Order crosses the TradeTicker seam to the active execution backend: native C++ direct signers (Polymarket EIP-712, Hyperliquid Rust, Aster), bundled cpp_live_proxy (CCXT / IBKR), PaperExchange thread, or BacktestState offline.',
-    trace: [
-      '// Core::TradeTicker -> LiveTradeTicker / BacktestTradeTicker',
-      'Order { symbol="BTCUSDT", side=BUY, type=MARKET, qty=0.01 }',
-      'dispatch(order);  // tick -> features -> ONNX -> order in <1 ms',
-    ],
+    col: 4,
+    headline: 'Strategy pool checks risk gates & dispatches order',
+    sync: 'ticker->trading_mutex → construct_order() → TradeTicker seam',
+    dataTitle: 'Core::Order Posted (<1 ms end-to-end)',
+    data: `risk_gate:  trading_mutex LOCKED · quotes_pulled=false · caps=PASS
+order:      { symbol: "BTCUSDT", side: BUY, type: MARKET, qty: "0.01" }
+dispatch:   LiveTradeTicker -> Direct Sign | cpp_live_proxy | PaperExchange`,
+    sourceRef: 'engine.cpp:871 · binance_onnx_perp.cpp:57',
+    code: `std::lock_guard lock(ticker->trading_mutex);
+auto [score, ts] = ticker->atomic_signal_main.load();
+Core::StrategyHelpers::submit_market_order(..., decision);`,
   },
 ];
 ---
 
-<div class="tm" id="thread-model" data-step="0">
-  <div class="tm-bar">
-    <div class="tm-meta">
-      <span class="tm-label">CONCURRENCY &amp; THREAD MODEL</span>
-      <span class="tm-count" id="tm-count">Step 1 / 6</span>
+<div class="ep" id="exec-path" data-step="0">
+  <!-- Understated top bar: legend left, quiet controls right -->
+  <div class="ep-top">
+    <div class="ep-legend" aria-label="Diagram key">
+      <span><i class="dot dot-comp"></i>Active compute</span>
+      <span><i class="dot dot-queue"></i>Lock-free queue</span>
+      <span><i class="dot dot-atom"></i>Atomic handoff</span>
     </div>
-    <div class="tm-controls">
-      <button type="button" class="tm-btn" id="tm-prev" aria-label="Previous step">← Prev</button>
-      <button type="button" class="tm-btn" id="tm-next" aria-label="Next step">Next →</button>
-      <button type="button" class="tm-btn" id="tm-play">Play</button>
+    <div class="ep-ctrl">
+      <span class="ep-step-num" id="ep-counter">1 / 5</span>
+      <button type="button" class="ep-btn" id="ep-prev" aria-label="Previous stage">←</button>
+      <button type="button" class="ep-btn" id="ep-next" aria-label="Next stage">→</button>
+      <button type="button" class="ep-btn ep-play" id="ep-play">Play</button>
     </div>
   </div>
 
-  <!-- 2D Thread-Swimlane Diagram -->
-  <div class="tm-canvas">
-    <svg viewBox="0 0 1000 356" role="img" aria-label="2D thread swimlane diagram showing how a market tick moves across WebSocket I/O, live_event_consumer_loop, StateMachineDispatcher, predictions thread pool, and strategy thread pool via lock-free queues and atomics" xmlns="http://www.w3.org/2000/svg">
-      <!-- Swimlane backgrounds (5 OS thread lanes) -->
-      <rect class="lane-bg" data-lane="0" x="0" y="16" width="1000" height="64" fill="transparent" />
-      <rect class="lane-bg" data-lane="1" x="0" y="80" width="1000" height="64" fill="transparent" />
-      <rect class="lane-bg" data-lane="2" x="0" y="144" width="1000" height="64" fill="transparent" />
-      <rect class="lane-bg" data-lane="3" x="0" y="208" width="1000" height="64" fill="transparent" />
-      <rect class="lane-bg" data-lane="4" x="0" y="272" width="1000" height="68" fill="transparent" />
+  <!-- Large, open 5-column vertical thread-swimlane illustration -->
+  <div class="ep-stage">
+    <svg
+      viewBox="0 0 1120 350"
+      role="img"
+      aria-label="Vertical thread swimlane illustration showing asynchronous left-to-right propagation from WebSocket I/O through lock-free queues, streaming C++ features, in-process ONNX inference, atomic signal handoff, and strategy order execution"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <marker id="arr-muted" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 1 L8 4 L0 7 z" fill="#475569" />
+        </marker>
+        <marker id="arr-queue" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 1 L8 4 L0 7 z" fill="#60a5fa" />
+        </marker>
+        <marker id="arr-atom" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 1 L8 4 L0 7 z" fill="#d4a359" />
+        </marker>
+      </defs>
 
-      <!-- Horizontal lane dividers -->
-      <line x1="0" y1="16" x2="1000" y2="16" stroke="#1e242e" stroke-width="1" />
-      <line x1="0" y1="80" x2="1000" y2="80" stroke="#1e242e" stroke-width="1" />
-      <line x1="0" y1="144" x2="1000" y2="144" stroke="#1e242e" stroke-width="1" />
-      <line x1="0" y1="208" x2="1000" y2="208" stroke="#1e242e" stroke-width="1" />
-      <line x1="0" y1="272" x2="1000" y2="272" stroke="#1e242e" stroke-width="1" />
-      <line x1="0" y1="340" x2="1000" y2="340" stroke="#1e242e" stroke-width="1" />
+      <!-- 5 Vertical Thread Swimlane Columns -->
+      <rect class="col-bg" data-col="0" x="0" y="0" width="216" height="350" fill="transparent" />
+      <rect class="col-bg" data-col="1" x="224" y="0" width="216" height="350" fill="transparent" />
+      <rect class="col-bg" data-col="2" x="448" y="0" width="216" height="350" fill="transparent" />
+      <rect class="col-bg" data-col="3" x="672" y="0" width="216" height="350" fill="transparent" />
+      <rect class="col-bg" data-col="4" x="896" y="0" width="224" height="350" fill="transparent" />
 
-      <!-- Left thread-gutter divider -->
-      <line x1="224" y1="16" x2="224" y2="340" stroke="#28303d" stroke-width="1" />
+      <!-- Vertical thread boundary hairlines -->
+      <line x1="220" y1="12" x2="220" y2="338" stroke="#1e2532" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="444" y1="12" x2="444" y2="338" stroke="#1e2532" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="668" y1="12" x2="668" y2="338" stroke="#1e2532" stroke-width="1" stroke-dasharray="3 4" />
+      <line x1="892" y1="12" x2="892" y2="338" stroke="#1e2532" stroke-width="1" stroke-dasharray="3 4" />
 
-      <!-- Left gutter: OS Thread names -->
-      <text x="16" y="44" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T1 · WS I/O Thread(s)</text>
-      <text x="16" y="61" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">MarketDataStreams</text>
+      <!-- Thread Column Headers -->
+      <text x="16" y="28" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T1 · WS I/O</text>
+      <text x="16" y="45" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">MarketDataStreams</text>
 
-      <text x="16" y="108" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T2 · live_event_consumer</text>
-      <text x="16" y="125" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Live::StateUpdater</text>
+      <text x="240" y="28" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T2 · Event Consumer</text>
+      <text x="240" y="45" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">live_event_consumer_loop</text>
 
-      <text x="16" y="172" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T3 · SM consumer_loop</text>
-      <text x="16" y="189" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">StateMachineDispatcher</text>
+      <text x="464" y="28" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T3 · Feature SM</text>
+      <text x="464" y="45" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">StateMachineDispatcher</text>
 
-      <text x="16" y="236" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T4 · predictions_pool</text>
-      <text x="16" y="253" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Core::Engine (ONNX)</text>
+      <text x="688" y="28" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T4 · ONNX Pool</text>
+      <text x="688" y="45" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">predictions_thread_pool</text>
 
-      <text x="16" y="302" fill="#d0d7e2" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600">T5 · strategy_pool</text>
-      <text x="16" y="319" fill="#6b7688" font-family="IBM Plex Mono, monospace" font-size="9.5">Core::Engine → Venue</text>
+      <text x="912" y="28" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600">T5 · Strategy Pool</text>
+      <text x="912" y="45" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">strategy_thread_pool</text>
 
-      <!-- Connectors between steps (explicit queues & atomics) -->
-      <!-- Edge 0->1: T1 -> live_event_queue_ -> T2 -->
-      <path class="edge" data-edge="0" d="M 390 48 L 414 48 L 414 112 L 434 112" fill="none" stroke="#2d3646" stroke-width="1.5" />
-      <rect x="358" y="70" width="112" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
-      <text x="414" y="83" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">live_event_queue_</text>
+      <!-- CONCURRENT UPPER BYPASS: Book / Price state flows asynchronously directly from T2 -> T5 -->
+      <path class="async-rail" d="M 332 136 L 332 92 L 1008 92 L 1008 134" fill="none" stroke="#263142" stroke-width="1.4" />
+      <path class="async-pulse" d="M 332 136 L 332 92 L 1008 92 L 1008 134" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arr-muted)" />
+      <text x="668" y="83" text-anchor="middle" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="9.5">
+        book &amp; spot state readable concurrently (async from ML path)
+      </text>
 
-      <!-- Edge 1->2: T2 -> sm_queue_ -> T3 -->
-      <path class="edge" data-edge="1" d="M 594 112 L 614 112 L 614 176 L 520 176" fill="none" stroke="#2d3646" stroke-width="1.5" />
-      <rect x="562" y="134" width="104" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
-      <text x="614" y="147" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">sm_queue_ (MPSC)</text>
+      <!-- MAIN LEFT-TO-RIGHT HANDOFF RAILS -->
+      <!-- Handoff 0->1: Lock-free Queue -->
+      <line class="handoff q-edge" data-edge="0" x1="194" y1="184" x2="246" y2="184" stroke="#334155" stroke-width="1.8" marker-end="url(#arr-queue)" />
+      <line class="flow-beam flow-q" data-beam="0" x1="194" y1="184" x2="242" y2="184" stroke="#60a5fa" stroke-width="2" />
+      <text x="220" y="218" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="9">live_event_queue_</text>
+      <text x="220" y="232" text-anchor="middle" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="8.5">lock-free MPSC</text>
 
-      <!-- Edge 2->3: T3 -> emit_state() -> T4 -->
-      <path class="edge" data-edge="2" d="M 520 176 L 552 176 L 552 240 L 584 240" fill="none" stroke="#2d3646" stroke-width="1.5" />
-      <rect x="506" y="198" width="92" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
-      <text x="552" y="211" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">emit_state()</text>
+      <!-- Handoff 1->2: Lock-free Queue -->
+      <line class="handoff q-edge" data-edge="1" x1="418" y1="184" x2="470" y2="184" stroke="#334155" stroke-width="1.8" marker-end="url(#arr-queue)" />
+      <line class="flow-beam flow-q" data-beam="1" x1="418" y1="184" x2="466" y2="184" stroke="#60a5fa" stroke-width="2" />
+      <text x="444" y="218" text-anchor="middle" fill="#60a5fa" font-family="IBM Plex Mono, monospace" font-size="9">sm_queue_</text>
+      <text x="444" y="232" text-anchor="middle" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="8.5">lock-free fan-out</text>
 
-      <!-- Edge 3->4: T4 -> atomic_signal_main -> T5 -->
-      <path class="edge" data-edge="3" d="M 744 240 L 764 240 L 764 306 L 744 306" fill="none" stroke="#2d3646" stroke-width="1.5" />
-      <rect x="704" y="262" width="120" height="19" rx="2" fill="#0d1016" stroke="#2d3646" />
-      <text x="764" y="275" text-anchor="middle" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="8.5">atomic_signal_main</text>
+      <!-- Handoff 2->3: Feature Vector Read -->
+      <line class="handoff c-edge" data-edge="2" x1="642" y1="184" x2="694" y2="184" stroke="#334155" stroke-width="1.8" marker-end="url(#arr-muted)" />
+      <line class="flow-beam flow-c" data-beam="2" x1="642" y1="184" x2="690" y2="184" stroke="#cbd5e1" stroke-width="2" />
+      <text x="668" y="218" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9">emit_state()</text>
+      <text x="668" y="232" text-anchor="middle" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="8.5">float[N]</text>
 
-      <!-- Edge 4->5: T5 -> Execution Seam -->
-      <path class="edge" data-edge="4" d="M 744 306 L 832 306" fill="none" stroke="#2d3646" stroke-width="1.5" />
+      <!-- Handoff 3->4: Atomic Store/Load -->
+      <line class="handoff a-edge" data-edge="3" x1="866" y1="184" x2="918" y2="184" stroke="#334155" stroke-width="1.8" marker-end="url(#arr-atom)" />
+      <line class="flow-beam flow-a" data-beam="3" x1="866" y1="184" x2="914" y2="184" stroke="#d4a359" stroke-width="2.2" />
+      <text x="892" y="218" text-anchor="middle" fill="#d4a359" font-family="IBM Plex Mono, monospace" font-size="9">atomic_signal</text>
+      <text x="892" y="232" text-anchor="middle" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="8.5">lock-free store/load</text>
 
-      <!-- Clickable Step Nodes -->
-      <!-- Step 0 (Lane 0) -->
-      <g class="snode" data-step-node="0" role="button" tabindex="0" aria-label="Step 1: Parse wire frame and enqueue">
-        <rect x="242" y="28" width="148" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="254" y="45" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">01 · Parse WS</text>
-        <text x="254" y="59" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">MarketEvent::TRADE</text>
+      <!-- STAGE NODES (Large, clean, clickable) -->
+      <!-- Node 0 -->
+      <g class="ep-node is-active" data-node="0" role="button" tabindex="0" aria-label="Stage 1: Parse wire frame">
+        <rect x="20" y="138" width="174" height="92" rx="3" fill="#0d1118" stroke="#2c3545" stroke-width="1.3" />
+        <text x="34" y="164" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">01 · INGEST</text>
+        <text x="34" y="186" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Parse Tick</text>
+        <text x="34" y="208" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10">MarketEvent::TRADE</text>
       </g>
 
-      <!-- Step 1 (Lane 1) -->
-      <g class="snode" data-step-node="1" role="button" tabindex="0" aria-label="Step 2: Update order book and fan out">
-        <rect x="434" y="92" width="160" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="446" y="109" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">02 · Book &amp; Fan-out</text>
-        <text x="446" y="123" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">RingBufferBook + BBA</text>
+      <!-- Node 1 -->
+      <g class="ep-node" data-node="1" role="button" tabindex="0" aria-label="Stage 2: Update order book and fan out">
+        <rect x="246" y="138" width="172" height="92" rx="3" fill="#0d1118" stroke="#2c3545" stroke-width="1.3" />
+        <text x="260" y="164" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">02 · STATE</text>
+        <text x="260" y="186" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">RingBufferBook</text>
+        <text x="260" y="208" fill="#cbd5e1" font-family="IBM Plex Mono, monospace" font-size="10">~1.5 ns/op apply_bid</text>
       </g>
 
-      <!-- Step 2 (Lane 2) -->
-      <g class="snode" data-step-node="2" role="button" tabindex="0" aria-label="Step 3: Streaming feature state machine update">
-        <rect x="348" y="156" width="172" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="360" y="173" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">03 · SM::react()</text>
-        <text x="360" y="187" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">Shared offline/live C++</text>
+      <!-- Node 2 -->
+      <g class="ep-node" data-node="2" role="button" tabindex="0" aria-label="Stage 3: Streaming feature state machine">
+        <rect x="470" y="138" width="172" height="92" rx="3" fill="#0d1118" stroke="#2c3545" stroke-width="1.3" />
+        <text x="484" y="164" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">03 · FEATURES</text>
+        <text x="484" y="186" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">SM::react()</text>
+        <text x="484" y="208" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10">Shared offline/live</text>
       </g>
 
-      <!-- Step 3 (Lane 3) -->
-      <g class="snode" data-step-node="3" role="button" tabindex="0" aria-label="Step 4: In-process ONNX inference">
-        <rect x="584" y="220" width="160" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="596" y="237" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">04 · ONNX::predict</text>
-        <text x="596" y="251" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">In-process C++ session</text>
+      <!-- Node 3 -->
+      <g class="ep-node" data-node="3" role="button" tabindex="0" aria-label="Stage 4: In-process ONNX inference">
+        <rect x="694" y="138" width="172" height="92" rx="3" fill="#0d1118" stroke="#2c3545" stroke-width="1.3" />
+        <text x="708" y="164" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">04 · INFERENCE</text>
+        <text x="708" y="186" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">ONNX Runtime</text>
+        <text x="708" y="208" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10">In-process C++</text>
       </g>
 
-      <!-- Step 4 (Lane 4, left) -->
-      <g class="snode" data-step-node="4" role="button" tabindex="0" aria-label="Step 5: Strategy decision and risk gate">
-        <rect x="564" y="286" width="180" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="576" y="303" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">05 · Strategy &amp; Risk</text>
-        <text x="576" y="317" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">trading_mutex · construct</text>
+      <!-- Node 4 -->
+      <g class="ep-node" data-node="4" role="button" tabindex="0" aria-label="Stage 5: Strategy decision, risk gate, and order dispatch">
+        <rect x="918" y="138" width="182" height="92" rx="3" fill="#0d1118" stroke="#2c3545" stroke-width="1.3" />
+        <text x="932" y="164" fill="#64748b" font-family="IBM Plex Mono, monospace" font-size="10">05 · EXECUTION</text>
+        <text x="932" y="186" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="14" font-weight="600">Risk &amp; Order</text>
+        <text x="932" y="208" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10">Direct · Proxy · Paper</text>
       </g>
 
-      <!-- Step 5 (Lane 4, right) -->
-      <g class="snode" data-step-node="5" role="button" tabindex="0" aria-label="Step 6: Execution seam dispatch">
-        <rect x="832" y="286" width="152" height="40" rx="2" fill="#10141c" stroke="#303a4b" stroke-width="1.2" />
-        <text x="844" y="303" fill="#e2e8f0" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600">06 · Dispatch Order</text>
-        <text x="844" y="317" fill="#8b96a8" font-family="IBM Plex Mono, monospace" font-size="9">Sign · Proxy · Paper</text>
-      </g>
-
-      <!-- Moving packet marker (positioned via JS transform on step change) -->
-      <circle id="tm-packet" cx="316" cy="48" r="5" fill="#d4a359" />
+      <!-- Bottom subtle end-to-end latency bracket -->
+      <path d="M 20 278 L 20 292 L 1100 292 L 1100 278" fill="none" stroke="#263142" stroke-width="1.2" />
+      <text x="560" y="314" text-anchor="middle" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="10.5">
+        &lt;1 ms end-to-end tick → features → inference → order · no cross-thread blocking on socket I/O
+      </text>
     </svg>
   </div>
 
-  <!-- Step Details Strip (monochrome engineering readout) -->
-  <div class="tm-details">
+  <!-- Clean, low-chrome inspector below the illustration -->
+  <div class="ep-inspector">
     {steps.map((s) => (
-      <div class={`tm-detail ${s.idx === 0 ? 'is-active' : ''}`} data-detail={s.idx}>
-        <div class="tm-copy">
-          <div class="tm-kv">
-            <span><strong>Thread:</strong> {s.thread}</span>
-            <span><strong>Boundary:</strong> {s.sync}</span>
+      <div class={`ep-row ${s.idx === 0 ? 'is-active' : ''}`} data-panel={s.idx}>
+        <div class="ep-summary">
+          <h3>{s.headline}</h3>
+          <div class="ep-sync">{s.sync}</div>
+          <div class="ep-src">
+            <span class="ep-src-ref">{s.sourceRef}</span>
+            <pre><code>{s.code}</code></pre>
           </div>
-          <h3>{s.title}</h3>
-          <p>{s.desc}</p>
         </div>
-        <pre class="tm-code"><code>{s.trace.join('\n')}</code></pre>
+        <div class="ep-data">
+          <div class="ep-data-title">{s.dataTitle}</div>
+          <pre><code>{s.data}</code></pre>
+        </div>
       </div>
     ))}
   </div>
 </div>
 
 <style>
-  .tm {
-    border: 1px solid #262e3c;
-    border-radius: 3px;
-    background: #0a0c10;
-    overflow: hidden;
+  .ep {
+    margin-top: 0.5rem;
   }
 
-  .tm-bar {
+  .ep-top {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.65rem 1rem;
-    border-bottom: 1px solid #1e242e;
-    background: #0d1016;
+    gap: 1rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
   }
 
-  .tm-meta {
+  .ep-legend {
     display: inline-flex;
-    align-items: center;
-    gap: 0.9rem;
+    flex-wrap: wrap;
+    gap: 1.25rem;
     font-family: var(--font-mono);
     font-size: 0.74rem;
+    color: #94a3b8;
   }
 
-  .tm-label {
-    color: #d0d7e2;
-    letter-spacing: 0.06em;
-    font-weight: 600;
-  }
-
-  .tm-count {
-    color: #7c8798;
-  }
-
-  .tm-controls {
+  .ep-legend span {
     display: inline-flex;
-    gap: 0.35rem;
+    align-items: center;
+    gap: 0.45rem;
   }
 
-  .tm-btn {
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .dot-comp {
+    background: #f1f5f9;
+  }
+
+  .dot-queue {
+    background: #60a5fa;
+  }
+
+  .dot-atom {
+    background: #d4a359;
+  }
+
+  .ep-ctrl {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+  }
+
+  .ep-step-num {
+    color: #64748b;
+    margin-right: 0.35rem;
+  }
+
+  .ep-btn {
     appearance: none;
     background: transparent;
-    border: 1px solid #2c3444;
-    color: #c7d0dd;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    color: #cbd5e1;
     font-family: var(--font-mono);
-    font-size: 0.73rem;
-    padding: 0.3rem 0.68rem;
-    border-radius: 2px;
+    font-size: 0.74rem;
+    padding: 0.26rem 0.62rem;
+    border-radius: 3px;
     cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+    transition: border-color 0.15s ease, color 0.15s ease;
   }
 
-  .tm-btn:hover {
+  .ep-btn:hover {
     border-color: #94a3b8;
-    color: #f8fafc;
+    color: #ffffff;
   }
 
-  .tm-btn:focus-visible,
-  .snode:focus-visible {
-    outline: 2px solid #d4a359;
+  .ep-btn:focus-visible,
+  .ep-node:focus-visible {
+    outline: 2px solid #f1f5f9;
     outline-offset: 2px;
   }
 
-  .tm-btn.is-playing {
+  .ep-play.is-playing {
     border-color: #d4a359;
     color: #f3d092;
-    background: rgba(212, 163, 89, 0.08);
   }
 
-  .tm-canvas {
-    padding: 0.75rem 0.5rem 0.5rem;
+  /* Open SVG stage — no boxed debug container */
+  .ep-stage {
+    padding: 1.25rem 0 0.5rem;
     overflow-x: auto;
-    background: #0a0c10;
   }
 
-  .tm-canvas svg {
+  .ep-stage svg {
     display: block;
     width: 100%;
-    min-width: 780px;
+    min-width: 820px;
     height: auto;
   }
 
-  .lane-bg {
-    transition: fill 0.2s ease;
+  .col-bg {
+    transition: fill 0.22s ease;
   }
 
-  .lane-bg.is-active {
-    fill: rgba(226, 232, 240, 0.035);
+  .col-bg.is-active {
+    fill: rgba(241, 245, 249, 0.03);
   }
 
-  .snode {
+  .ep-node {
     cursor: pointer;
   }
 
-  .snode rect {
+  .ep-node rect {
     transition: stroke 0.2s ease, fill 0.2s ease;
   }
 
-  .snode:hover rect {
+  .ep-node:hover rect {
     stroke: #64748b;
   }
 
-  .snode.is-done rect {
-    stroke: #525f75;
-    fill: #12161f;
+  .ep-node.is-done rect {
+    stroke: #475569;
+    fill: #0f141e;
   }
 
-  .snode.is-active rect {
-    stroke: #e2e8f0;
-    fill: #161b26;
-    stroke-width: 1.6;
+  .ep-node.is-active rect {
+    stroke: #f1f5f9;
+    fill: #131926;
+    stroke-width: 1.8;
   }
 
-  .edge {
-    transition: stroke 0.2s ease;
+  /* Asynchronous concurrent pulses */
+  .async-pulse,
+  .flow-beam {
+    stroke-dasharray: 6 12;
+    opacity: 0.22;
+    transition: opacity 0.2s ease;
   }
 
-  .edge.is-done {
-    stroke: #64748b;
+  .flow-beam.is-active {
+    opacity: 1;
   }
 
-  .edge.is-active {
-    stroke: #d4a359;
-    stroke-width: 2;
+  .async-pulse.is-active {
+    opacity: 0.85;
   }
 
-  #tm-packet {
-    transition: cx 0.28s ease, cy 0.28s ease;
+  @media (prefers-reduced-motion: no-preference) {
+    .ep:not(.is-paused) .async-pulse {
+      animation: epFlow 2.2s linear infinite;
+    }
+    .ep:not(.is-paused) .flow-beam.is-active {
+      animation: epFlow 0.9s linear infinite;
+    }
   }
 
-  .tm-details {
-    border-top: 1px solid #1e242e;
-    background: #0d1016;
+  @keyframes epFlow {
+    from {
+      stroke-dashoffset: 36;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
   }
 
-  .tm-detail {
+  /* Quiet, border-minimal bottom inspector */
+  .ep-inspector {
+    margin-top: 0.75rem;
+    padding-top: 1.35rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+  }
+
+  .ep-row {
     display: none;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-    gap: 1.75rem;
-    padding: 1.35rem 1.25rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+    gap: 2.5rem;
     align-items: start;
   }
 
-  .tm-detail.is-active {
+  .ep-row.is-active {
     display: grid;
   }
 
-  .tm-kv {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.45rem 1.25rem;
-    font-family: var(--font-mono);
-    font-size: 0.74rem;
-    color: #8b96a8;
-    margin-bottom: 0.55rem;
-  }
-
-  .tm-kv strong {
-    color: #d0d7e2;
-    font-weight: 500;
-  }
-
-  .tm-copy h3 {
-    margin: 0 0 0.45rem;
+  .ep-summary h3 {
+    margin: 0 0 0.35rem;
     font-size: 1.05rem;
     font-weight: 600;
-    color: #eef2f7;
+    color: #f1f5f9;
     letter-spacing: -0.015em;
   }
 
-  .tm-copy p {
-    margin: 0;
-    font-size: 0.88rem;
+  .ep-sync {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
     color: #94a3b8;
-    line-height: 1.58;
+    margin-bottom: 1rem;
   }
 
-  .tm-code {
-    margin: 0;
-    padding: 0.95rem 1.05rem;
-    border: 1px solid #1f2633;
-    border-radius: 2px;
-    background: #080a0e;
+  .ep-src {
+    opacity: 0.82;
+  }
+
+  .ep-src-ref {
+    display: block;
     font-family: var(--font-mono);
-    font-size: 0.75rem;
-    line-height: 1.65;
-    color: #cbd5e1;
+    font-size: 0.71rem;
+    color: #64748b;
+    margin-bottom: 0.35rem;
+  }
+
+  .ep-src pre {
+    margin: 0;
+    padding: 0.65rem 0.85rem;
+    border-left: 2px solid #2c3545;
+    background: rgba(13, 17, 24, 0.65);
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    line-height: 1.55;
+    color: #94a3b8;
+    overflow-x: auto;
+  }
+
+  .ep-data-title {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 0.45rem;
+  }
+
+  .ep-data pre {
+    margin: 0;
+    padding: 0.9rem 1.05rem;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 3px;
+    background: #0a0e15;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    line-height: 1.62;
+    color: #e2e8f0;
     overflow-x: auto;
   }
 
   @media (max-width: 860px) {
-    .tm-detail {
+    .ep-row {
       grid-template-columns: 1fr;
-      gap: 1rem;
+      gap: 1.25rem;
     }
   }
 </style>
 
 <script>
-  const root = document.getElementById('thread-model');
+  const root = document.getElementById('exec-path');
   if (root) {
-    const nodes = Array.from(root.querySelectorAll('.snode'));
-    const edges = Array.from(root.querySelectorAll('.edge'));
-    const lanes = Array.from(root.querySelectorAll('.lane-bg'));
-    const details = Array.from(root.querySelectorAll('.tm-detail'));
-    const packet = document.getElementById('tm-packet');
-    const counter = document.getElementById('tm-count');
-    const prevBtn = document.getElementById('tm-prev');
-    const nextBtn = document.getElementById('tm-next');
-    const playBtn = document.getElementById('tm-play');
-
-    // Exact center coordinates of each step node + its lane index
-    const coords = [
-      { cx: 316, cy: 48, lane: 0 },
-      { cx: 514, cy: 112, lane: 1 },
-      { cx: 434, cy: 176, lane: 2 },
-      { cx: 664, cy: 240, lane: 3 },
-      { cx: 654, cy: 306, lane: 4 },
-      { cx: 908, cy: 306, lane: 4 },
-    ];
+    const nodes = Array.from(root.querySelectorAll('.ep-node'));
+    const cols = Array.from(root.querySelectorAll('.col-bg'));
+    const beams = Array.from(root.querySelectorAll('.flow-beam'));
+    const asyncPulse = root.querySelector('.async-pulse');
+    const panels = Array.from(root.querySelectorAll('.ep-row'));
+    const counter = document.getElementById('ep-counter');
+    const prevBtn = document.getElementById('ep-prev');
+    const nextBtn = document.getElementById('ep-next');
+    const playBtn = document.getElementById('ep-play');
 
     let current = 0;
     let timer = null;
 
     function setStep(idx) {
-      current = (idx + coords.length) % coords.length;
+      current = (idx + nodes.length) % nodes.length;
       root.dataset.step = String(current);
-      if (counter) counter.textContent = `Step ${current + 1} / ${coords.length}`;
+      if (counter) counter.textContent = `${current + 1} / ${nodes.length}`;
 
-      const pt = coords[current];
-      if (packet) {
-        packet.setAttribute('cx', String(pt.cx));
-        packet.setAttribute('cy', String(pt.cy));
-      }
-
-      lanes.forEach((l) => {
-        l.classList.toggle('is-active', Number(l.dataset.lane) === pt.lane);
-      });
-
+      cols.forEach((c, i) => c.classList.toggle('is-active', i === current));
       nodes.forEach((n, i) => {
         n.classList.toggle('is-active', i === current);
         n.classList.toggle('is-done', i < current);
       });
-
-      edges.forEach((e, i) => {
-        e.classList.toggle('is-active', i === current - 1);
-        e.classList.toggle('is-done', i < current - 1);
+      beams.forEach((b, i) => {
+        b.classList.toggle('is-active', i === current - 1 || (current === 0 && i === 0));
       });
-
-      details.forEach((d, i) => {
-        d.classList.toggle('is-active', i === current);
-      });
+      asyncPulse?.classList.toggle('is-active', current >= 1);
+      panels.forEach((p, i) => p.classList.toggle('is-active', i === current));
     }
 
     function stopAuto() {
