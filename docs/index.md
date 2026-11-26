@@ -16,62 +16,32 @@ Built for crypto spot/perpetuals and prediction markets (including native Polyma
 
 ## Streaming features → ONNX → order
 
-The core loop pairs a registered `StrategyStateMachine` with `OnnxModel` and `StrategyHelpers`:
+The core loop pairs a registered `StrategyStateMachine` (`windowed_taker_flow`) with `OnnxModel` and `StrategyHelpers` (excerpt from [`binance_onnx_perp.cpp`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp)):
 
 ```cpp
-#include "market_data/state_machine_dispatcher.h"
-#include "market_making/strategy_helpers.h"
-#include "market_making/strategy_registry.h"
-#include "onnx_model.h"
-
-namespace {
-
-OnnxModel& model() {
-    static OnnxModel instance("model.onnx");
-    return instance;
-}
-
-std::vector<Core::StrategyDecision> on_market_event(
-    Core::Engine& engine, Core::Strategy& strategy,
-    std::optional<Core::MarketEvent>) {
-    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine("taker_flow");
+void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {
+    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine(
+        "windowed_taker_flow");
     auto features = sm ? sm->emit_state() : std::nullopt;
-    if (!features) return {};
+    if (!features || features->empty()) return;
 
-    const float score = model().predict(*features);
-    std::vector<Core::StrategyDecision> decisions;
-
-    for (auto& [symbol, ticker] : strategy.trade_tickers) {
-        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
-        const auto& em = ticker->exchange_and_markets.front();
-        const auto price = engine.get_price(symbol, em.exchange_name, em.market_type);
-        if (!price || !ticker->get_orders(false).empty()) continue;
-
-        Core::StrategyDecision decision;
-        decision.symbol = symbol;
-        const auto trades = ticker->get_trades(false);
-        if (trades.empty() && score > 0.65f) {
-            Core::StrategyHelpers::submit_market_order(
-                engine, strategy, *ticker, Core::OrderSide::BUY, *price,
-                mpfr::mpreal(0.01), decision);
-        } else if (!trades.empty() && score < 0.45f) {
-            Core::StrategyHelpers::close_trade_market(
-                engine, strategy, *ticker, trades.front(), *price, decision);
+    float score = 0.5f;
+    if (!strategy.strategy_config.strategy_models.empty()) {
+        auto model = get_or_load_model(
+            strategy.strategy_config.strategy_models.front().path_to_model);
+        if (model && features->size() == model->get_input_size()) {
+            score = model->predict(*features);
         }
-        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
     }
-    return decisions;
+
+    const long long now_ms = engine.get_time();
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        ticker->atomic_signal_main.store(score, now_ms);
+    }
 }
-
-void bind_ml_strategy(Core::Strategy& strategy) {
-    strategy.strategy_callback = on_market_event;
-    strategy.compute_predictions_callback = [](Core::Engine&, Core::Strategy&) {};
-}
-
-}  // namespace
-
-KERONIS_REGISTER_STRATEGY("ml_taker", bind_ml_strategy);
 ```
+
+See [Strategies](strategies.md) for both flagship compiled examples (`binance_onnx_perp` and `polymarket_digital`).
 
 ## Workflow
 
@@ -93,7 +63,7 @@ KERONIS_REGISTER_STRATEGY("ml_taker", bind_ml_strategy);
 ## Current scope & limitations
 
 - **Platform:** Linux and C++20 only (no Python strategy API).
-- **Standalone today:** Core engine, 225+ unit tests, 7 bundled state machines, ONNX inference, `backtest_runner`, `historical_feature_gen`, and `PaperExchange`.
+- **Standalone today:** Core engine, 260+ unit tests, 2 teaching state machines (`windowed_taker_flow`, `spread`), 2 flagship example strategies (`binance_onnx_perp`, `polymarket_digital`), ONNX inference, `backtest_runner`, `historical_feature_gen`, and `PaperExchange`.
 - **Live execution note:** Live deployments require PostgreSQL and NATS (`deploy/docker-compose.yml` + `deploy/schema.sql`). Direct-signing order submission currently still queries `CCXT_PROXY_BASE_URL` for credential lookup; a standalone file-based credential path is next.
 
 ## Documentation

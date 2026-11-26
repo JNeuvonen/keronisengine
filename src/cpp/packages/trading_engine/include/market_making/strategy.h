@@ -205,7 +205,7 @@ class Strategy {
 
     // --- OBSERVABILITY: WATCHED STATE MACHINES ---
     // Additional SMs this strategy depends on beyond strategy_event_state_machine
-    // (e.g. shared globals like "global_bba_sm"). Populated at strategy init via
+    // (e.g. shared state machines). Populated at strategy init via
     // watch_state_machine(). The observability heartbeat walks this vector +
     // strategy_event_state_machine to build strategy_health.sm_dependencies and
     // strategy_health.sm_health_summary.

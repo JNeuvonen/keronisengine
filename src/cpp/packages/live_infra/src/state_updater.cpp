@@ -4213,7 +4213,7 @@ void Live::StateUpdater::live_event_consumer_loop() {
                             }
                         }
                     }
-                    // Forward to the SM dispatcher so PolymarketTradeFlowSM
+                    // Forward to the SM dispatcher for registered state machines
                     // ingests CLOB trades and computes windowed PM OFI / volume
                     // / trade-rate (read by the strategy via get_flow()).
                     // Enqueued after releasing polymarket_clob_tickers_mutex_ —

@@ -1,6 +1,13 @@
 # State Machines & ONNX
 
-Streaming features are implemented as C++ subclasses of `MarketData::StrategyStateMachine`. The same class runs in `historical_feature_gen` (offline Parquet training sets), `backtest_runner`, and `live_infra`, avoiding feature drift between training and serving.
+Streaming features are implemented as C++ subclasses of `MarketData::StrategyStateMachine`. The same compiled class runs in `historical_feature_gen` (offline Parquet training sets), `backtest_runner`, and `live_infra`, eliminating feature-code drift between training and serving.
+
+## Bundled teaching state machines
+
+Two clean, unit-tested reference state machines are included under `src/cpp/packages/historical_feature_gen/src/transformations/` (verified in `test_example_state_machines.cpp`):
+
+- **`windowed_taker_flow`** (`windowed_taker_flow_sm.cpp`): Maintains a 1-second ring buffer of taker buy/sell notional and trade counts per configured `symbol_keys` (format `SYMBOL:exchange:market_type`, e.g. `BTCUSDT:binance:swap`) across configurable `windows_sec` (e.g. `[5, 30, 300]`). Emits `buy_ratio`, `trade_count`, `buy_volume`, `sell_volume` per window plus cross-window volume ratios. Used by the `binance_onnx_perp` example strategy.
+- **`spread`** (`spread_sm.cpp`): Minimal BBA spread tracker (`ask - bid`) per configured symbol key. Guards `emit_state_impl()` with `has_bba` so it returns `std::nullopt` until every configured symbol has received a valid BBA quote—demonstrating safe warmup handling.
 
 ## Implementing and registering a state machine
 
@@ -44,7 +51,7 @@ class MyFeatureSM : public MarketData::StrategyStateMachine {
 KERONIS_REGISTER_STATE_MACHINE("my_features", MyFeatureSM);
 ```
 
-Seven reference state machines are included under `src/cpp/packages/historical_feature_gen/src/transformations/`: `spread_sm`, `taker_flow_sm`, `windowed_taker_flow_sm`, `bba_imbalance_ratio_sm`, `global_bba_sm`, `six_venue_order_sm`, and `polymarket_trade_flow_sm`.
+Compile your private state machines into the engine without forking by passing their directory in `-DKERONIS_STRATEGY_DIRS`.
 
 ## Live lifecycle hooks
 
@@ -54,4 +61,4 @@ Seven reference state machines are included under `src/cpp/packages/historical_f
 
 ## ONNX Runtime inference
 
-`common/include/onnx_model.h` wraps ONNX Runtime C++ sessions for in-process scoring. Export a trained model to `.onnx`, reference it in `StrategyConfig` (`models` or `model_schedule_path`), and score the feature vector returned by your state machine inside `compute_predictions_callback`.
+`common/include/onnx_model.h` wraps ONNX Runtime C++ sessions for in-process scoring. Export a trained model to `.onnx`, reference it in `StrategyConfig` (`strategy_models` or `model_schedule_path`), and score the feature vector returned by your state machine inside `compute_predictions_callback`, publishing the result lock-free via `ticker->atomic_signal_main.store(score, now_ms)`. See [Binance ONNX Perp](strategies.md#binance-onnx-perp) for a complete compiled example.

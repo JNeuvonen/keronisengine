@@ -1,43 +1,53 @@
 ---
-const title = 'KeronisEngine — C++20 Trading Engine Built for Predictive Models';
+const title = 'KeronisEngine — C++20 Execution Built for Predictive Models';
 const description =
-  'Open-source C++20 execution and real-time ML inference engine. Sub-millisecond tick-to-ONNX-to-order execution for crypto, Polymarket, and event markets on a single $100 server.';
+  'Open-source C++20 execution and real-time ML inference engine. Sub-millisecond tick-to-ONNX-to-order execution for crypto, Polymarket, and event markets on commodity hardware.';
 
-const codeStrategy = `#include "market_data/state_machine_dispatcher.h"
-#include "market_making/strategy_helpers.h"
-#include "market_making/strategy_registry.h"
-#include "onnx_model.h"
+const codeBinanceOnnx = `// src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp
+void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {
+    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine(
+        "windowed_taker_flow");
+    auto features = sm ? sm->emit_state() : std::nullopt;
+    if (!features || features->empty()) return;
 
-namespace {
-OnnxModel& model() {
-    static OnnxModel instance("model.onnx");
-    return instance;
+    float score = 0.5f;
+    if (!strategy.strategy_config.strategy_models.empty()) {
+        auto model = get_or_load_model(
+            strategy.strategy_config.strategy_models.front().path_to_model);
+        if (model && features->size() == model->get_input_size()) {
+            score = model->predict(*features);
+        }
+    }
+
+    const long long now_ms = engine.get_time();
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        ticker->atomic_signal_main.store(score, now_ms);
+    }
 }
 
 std::vector<Core::StrategyDecision> on_market_event(
     Core::Engine& engine, Core::Strategy& strategy,
     std::optional<Core::MarketEvent>) {
-    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine("taker_flow");
-    auto features = sm ? sm->emit_state() : std::nullopt;
-    if (!features) return {};
-
-    const float score = model().predict(*features);
     std::vector<Core::StrategyDecision> decisions;
-
     for (auto& [symbol, ticker] : strategy.trade_tickers) {
         std::lock_guard<std::mutex> lock(ticker->trading_mutex);
+        if (!ticker->get_orders(false).empty() || ticker->exchange_and_markets.empty()) continue;
+
+        const auto [score, signal_ts] = ticker->atomic_signal_main.load();
+        if (signal_ts <= 0) continue;
+
         const auto& em = ticker->exchange_and_markets.front();
         const auto price = engine.get_price(symbol, em.exchange_name, em.market_type);
-        if (!price || !ticker->get_orders(false).empty()) continue;
+        if (!price || *price <= 0.0) continue;
 
         Core::StrategyDecision decision;
         decision.symbol = symbol;
         const auto trades = ticker->get_trades(false);
-        if (trades.empty() && score > 0.65f) {
+        if (trades.empty() && score > kEnterThreshold) {
             Core::StrategyHelpers::submit_market_order(
                 engine, strategy, *ticker, Core::OrderSide::BUY, *price,
-                mpfr::mpreal(0.01), decision);
-        } else if (!trades.empty() && score < 0.45f) {
+                mpfr::mpreal(kOrderQty), decision);
+        } else if (!trades.empty() && score < kExitThreshold) {
             Core::StrategyHelpers::close_trade_market(
                 engine, strategy, *ticker, trades.front(), *price, decision);
         }
@@ -46,54 +56,92 @@ std::vector<Core::StrategyDecision> on_market_event(
     return decisions;
 }
 
-void bind_ml_strategy(Core::Strategy& strategy) {
-    strategy.strategy_callback = on_market_event;
-    strategy.compute_predictions_callback = [](Core::Engine&, Core::Strategy&) {};
+KERONIS_REGISTER_STRATEGY("binance_onnx_perp", bind_binance_onnx_perp);`;
+
+const codePolymarketDigital = `// src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp
+double fair_prob_yes(double spot, double strike, double tau_sec) {
+    const double denom = kAnnualVol * std::sqrt(tau_sec / kSecondsPerYear);
+    if (denom <= 1e-9) return spot >= strike ? 1.0 : 0.0;
+    return std::clamp(normal_cdf(std::log(spot / strike) / denom), 0.01, 0.99);
 }
-}  // namespace
 
-KERONIS_REGISTER_STRATEGY("ml_taker", bind_ml_strategy);`;
+std::vector<Core::StrategyDecision> on_market_event(
+    Core::Engine& engine, Core::Strategy& strategy,
+    std::optional<Core::MarketEvent>) {
+    std::vector<Core::StrategyDecision> decisions;
+    const long long now_ms = engine.get_time();
 
-const codeSm = `#include "market_data/state_machine_registry.h"
-#include "market_data/strategy_state_machine.h"
+    auto tickers_lock = strategy.lock_on_pred_market_strat();
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
+        if (ticker->clob_ids_by_index.size() < 2 || !ticker->get_orders(false).empty()) continue;
 
-namespace {
-class MyFeatureSM : public MarketData::StrategyStateMachine {
-   public:
-    std::string get_name() const override { return "my_features"; }
-    std::vector<std::string> feature_names() const override { return {"last_price"}; }
-    void initialize_symbol_states() override { last_price_ = 0.0f; }
+        const long long remaining_ms = ticker->event_end_time_ms.load() - now_ms;
+        const auto spot = engine.get_price(ticker->underlying_symbol, "binance", "swap");
+        if (remaining_ms < kMinRemainingMs || !spot || *spot <= 0.0) continue;
 
-   protected:
-    void react_impl(const MarketData::MarketEvent& event) override {
-        if (event.type == MarketData::MarketEvent::Type::TRADE && event.trade) {
-            last_price_ = static_cast<float>(event.trade->price);
+        const double p_yes = fair_prob_yes(*spot, ticker->strike_price, remaining_ms / 1000.0);
+        const double fair[2] = {p_yes, 1.0 - p_yes};
+        const double tick = ticker->order_price_min_tick_size.load();
+
+        Core::StrategyDecision decision;
+        decision.symbol = symbol;
+        for (int outcome = 0; outcome < 2; ++outcome) {
+            if (ticker->get_outcome_exchange_inventory(outcome) >= kMaxOutcomePos) continue;
+            const auto bba = ticker->read_outcome_bba(outcome);
+            if (!bba || bba->best_ask <= 0.0 || (fair[outcome] - bba->best_ask) < kMinEdge) continue;
+
+            auto [res, order] = ticker->construct_order(engine, strategy, make_limit_buy(
+                symbol, round_to_tick(bba->best_ask, tick), kOrderShares, now_ms, *ticker, strategy));
+            if (res == Core::OrderConstructionResult::VALID && order.has_value()) {
+                auto o = order.value();
+                o.is_prediction_market_order = true;
+                o.clob_id = ticker->clob_ids_by_index[outcome];
+                o.outcome_name = outcome == 0 ? "Yes" : "No";
+                ticker->mark_order_to_be_created(engine, o, decision, strategy);
+                break;
+            }
         }
+        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
     }
+    return decisions;
+}
 
-    std::optional<std::vector<float>> emit_state_impl() const override {
-        if (last_price_ <= 0.0f) return std::nullopt;
-        return std::vector<float>{last_price_};
+KERONIS_REGISTER_STRATEGY("polymarket_digital", bind_polymarket_digital);`;
+
+const codeSpreadSm = `// src/cpp/packages/historical_feature_gen/src/transformations/spread_sm.cpp
+void SpreadSM::react_impl(const MarketData::MarketEvent& event) {
+    if (event.type != MarketData::MarketEvent::BBA || !event.bba.has_value()) return;
+    auto it = symbol_states_.find(event.symbol_key());
+    if (it == symbol_states_.end()) return;
+
+    const double bid = event.bba->bid_price;
+    const double ask = event.bba->ask_price;
+    if (bid <= 0.0 || ask <= 0.0 || ask < bid) return;
+
+    it->second.last_bid = bid;
+    it->second.last_ask = ask;
+    it->second.has_bba = true;
+}
+
+std::optional<std::vector<float>> SpreadSM::emit_state_impl() const {
+    if (symbol_states_.empty()) return std::nullopt;
+    std::vector<float> result;
+    result.reserve(symbol_states_.size());
+    for (const auto& [key, state] : symbol_states_) {
+        if (!state.has_bba) return std::nullopt;
+        result.push_back(static_cast<float>(state.last_ask - state.last_bid));
     }
+    return result;
+}
 
-   private:
-    float last_price_ = 0.0f;
-};
-}  // namespace
+std::vector<std::string> SpreadSM::feature_names() const {
+    std::vector<std::string> names;
+    for (const auto& [key, _] : symbol_states_) names.push_back(key + ":spread");
+    return names;
+}
 
-KERONIS_REGISTER_STATE_MACHINE("my_features", MyFeatureSM);`;
-
-const codeBuild = `# Compile your private strategies and state machines into KeronisEngine without forking
-export VCPKG_ROOT=/path/to/vcpkg
-ORT=$(./scripts/fetch_onnxruntime.sh)
-
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \\
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \\
-  -DONNXRUNTIME_ROOT="$ORT" \\
-  -DKERONIS_STRATEGY_DIRS="/path/to/my_strategies;/path/to/my_state_machines"
-
-cmake --build build -j"$(nproc)"
-./build/bin/trading_engine_tests`;
+KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 ---
 
 <!doctype html>
@@ -124,6 +172,7 @@ cmake --build build -j"$(nproc)"
         --cyan-soft: rgba(34, 211, 238, 0.12);
         --emerald: #34d399;
         --emerald-soft: rgba(52, 211, 153, 0.12);
+        --amber: #fbbf24;
         --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
         --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
       }
@@ -148,7 +197,6 @@ cmake --build build -j"$(nproc)"
         text-decoration: none;
       }
 
-      /* Precision grid backdrop */
       .backdrop {
         position: fixed;
         inset: 0;
@@ -157,7 +205,7 @@ cmake --build build -j"$(nproc)"
         background-image:
           radial-gradient(ellipse 75% 45% at 50% -8%, rgba(34, 211, 238, 0.13), transparent 70%),
           radial-gradient(ellipse 40% 35% at 85% 18%, rgba(52, 211, 153, 0.07), transparent 65%),
-          radial-gradient(rgba(148, 163, 184, 0.11) 1px, transparent 1px);
+          radial-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px);
         background-size: 100% 100%, 100% 100%, 28px 28px;
       }
 
@@ -169,13 +217,12 @@ cmake --build build -j"$(nproc)"
         padding: 0 1.5rem;
       }
 
-      /* Topbar */
       header {
         position: sticky;
         top: 0;
         z-index: 20;
         backdrop-filter: blur(14px);
-        background: rgba(7, 9, 14, 0.78);
+        background: rgba(7, 9, 14, 0.8);
         border-bottom: 1px solid var(--border);
       }
 
@@ -225,9 +272,8 @@ cmake --build build -j"$(nproc)"
         border-color: var(--cyan);
       }
 
-      /* Hero */
       .hero {
-        padding: clamp(3.5rem, 8vw, 6.2rem) 0 3.2rem;
+        padding: clamp(3.2rem, 7vw, 5.8rem) 0 2.6rem;
       }
 
       .eyebrow {
@@ -241,7 +287,7 @@ cmake --build build -j"$(nproc)"
         border: 1px solid rgba(34, 211, 238, 0.28);
         padding: 0.3rem 0.75rem;
         border-radius: 999px;
-        margin-bottom: 1.4rem;
+        margin-bottom: 1.35rem;
       }
 
       .eyebrow-dot {
@@ -253,11 +299,11 @@ cmake --build build -j"$(nproc)"
       }
 
       h1 {
-        font-size: clamp(2.35rem, 5.4vw, 4.1rem);
-        line-height: 1.04;
+        font-size: clamp(2.35rem, 5.2vw, 4rem);
+        line-height: 1.05;
         letter-spacing: -0.035em;
         font-weight: 800;
-        margin: 0 0 1.25rem;
+        margin: 0 0 1.2rem;
         max-width: 17ch;
       }
 
@@ -269,26 +315,26 @@ cmake --build build -j"$(nproc)"
       }
 
       .lead {
-        font-size: clamp(1.03rem, 1.45vw, 1.2rem);
+        font-size: clamp(1.03rem, 1.4vw, 1.18rem);
         color: var(--text-muted);
         max-width: 64ch;
-        margin: 0 0 2rem;
+        margin: 0 0 1.9rem;
       }
 
       .actions {
         display: flex;
         flex-wrap: wrap;
         gap: 0.75rem;
-        margin-bottom: 1.6rem;
+        margin-bottom: 1.5rem;
       }
 
       .btn {
         display: inline-flex;
         align-items: center;
         gap: 0.45rem;
-        padding: 0.75rem 1.35rem;
+        padding: 0.75rem 1.3rem;
         border-radius: 0.5rem;
-        font-size: 0.93rem;
+        font-size: 0.92rem;
         font-weight: 600;
         transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
       }
@@ -349,16 +395,15 @@ cmake --build build -j"$(nproc)"
         border-color: var(--cyan);
       }
 
-      /* Metrics strip */
       .metrics {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         gap: 0.9rem;
-        margin: 2.8rem 0 3.5rem;
+        margin: 2.6rem 0 0;
       }
 
       .metric {
-        padding: 1.15rem 1.25rem;
+        padding: 1.1rem 1.2rem;
         border-radius: 0.7rem;
         background: var(--bg-card);
         border: 1px solid var(--border);
@@ -366,7 +411,7 @@ cmake --build build -j"$(nproc)"
 
       .metric-val {
         font-family: var(--font-mono);
-        font-size: 1.55rem;
+        font-size: 1.48rem;
         font-weight: 700;
         color: var(--text);
         letter-spacing: -0.02em;
@@ -378,13 +423,12 @@ cmake --build build -j"$(nproc)"
 
       .metric-lbl {
         margin-top: 0.35rem;
-        font-size: 0.84rem;
+        font-size: 0.83rem;
         color: var(--text-muted);
       }
 
-      /* Section headings */
       section {
-        margin-bottom: 4.5rem;
+        margin-bottom: 4.4rem;
       }
 
       .sec-kicker {
@@ -397,51 +441,215 @@ cmake --build build -j"$(nproc)"
       }
 
       h2 {
-        font-size: clamp(1.55rem, 2.8vw, 2.15rem);
+        font-size: clamp(1.5rem, 2.7vw, 2.1rem);
         letter-spacing: -0.025em;
-        margin: 0 0 0.7rem;
+        margin: 0 0 0.65rem;
         line-height: 1.18;
       }
 
       .sec-desc {
         color: var(--text-muted);
-        max-width: 66ch;
-        margin: 0 0 1.8rem;
-        font-size: 0.98rem;
+        max-width: 68ch;
+        margin: 0 0 1.65rem;
+        font-size: 0.97rem;
       }
 
-      /* Pipeline strip */
-      .pipeline {
+      /* Architecture schematic SVG */
+      .diagram-shell {
+        border-radius: 0.8rem;
+        border: 1px solid var(--border-bright);
+        background: linear-gradient(180deg, rgba(12, 16, 26, 0.96), rgba(8, 11, 18, 0.98));
+        padding: 1.25rem;
+        overflow-x: auto;
+      }
+
+      .diagram-shell svg {
+        display: block;
+        width: 100%;
+        min-width: 740px;
+        height: auto;
+      }
+
+      /* Flagship examples */
+      .examples-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
-        gap: 0.85rem;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 1.1rem;
       }
 
-      .pipe-step {
-        position: relative;
-        padding: 1.15rem;
-        border-radius: 0.7rem;
-        background: linear-gradient(180deg, rgba(16, 22, 35, 0.95), rgba(11, 15, 24, 0.95));
-        border: 1px solid var(--border);
+      .example-card {
+        display: flex;
+        flex-direction: column;
+        padding: 1.5rem;
+        border-radius: 0.8rem;
+        border: 1px solid var(--border-bright);
+        background: linear-gradient(180deg, rgba(16, 22, 35, 0.95), rgba(11, 15, 24, 0.98));
       }
 
-      .pipe-num {
+      .example-card.cyan-accent {
+        border-color: rgba(34, 211, 238, 0.34);
+      }
+
+      .example-card.emerald-accent {
+        border-color: rgba(52, 211, 153, 0.34);
+      }
+
+      .example-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .pill {
         font-family: var(--font-mono);
         font-size: 0.72rem;
+        padding: 0.22rem 0.6rem;
+        border-radius: 999px;
+        border: 1px solid var(--border-bright);
+        color: var(--cyan);
+        background: var(--cyan-soft);
+      }
+
+      .pill.emerald {
         color: var(--emerald);
-        margin-bottom: 0.4rem;
+        background: var(--emerald-soft);
+        border-color: rgba(52, 211, 153, 0.3);
       }
 
-      .pipe-step h3 {
-        margin: 0 0 0.35rem;
-        font-size: 0.96rem;
-        font-weight: 700;
+      .example-card h3 {
+        margin: 0 0 0.45rem;
+        font-size: 1.18rem;
+        letter-spacing: -0.015em;
       }
 
-      .pipe-step p {
-        margin: 0;
-        font-size: 0.83rem;
+      .example-card .summary {
+        margin: 0 0 1.1rem;
+        font-size: 0.9rem;
         color: var(--text-muted);
+      }
+
+      .spec-list {
+        margin: 0 0 1.25rem;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        color: var(--text-muted);
+      }
+
+      .spec-list li {
+        display: grid;
+        grid-template-columns: 88px 1fr;
+        gap: 0.6rem;
+      }
+
+      .spec-list strong {
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding-top: 0.12rem;
+      }
+
+      .example-links {
+        margin-top: auto;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.9rem;
+        padding-top: 0.9rem;
+        border-top: 1px solid var(--border);
+        font-size: 0.85rem;
+        font-weight: 600;
+      }
+
+      .example-links a {
+        color: var(--cyan);
+      }
+
+      .example-links a:hover {
+        text-decoration: underline;
+      }
+
+      /* Code tabs */
+      .code-shell {
+        border-radius: 0.75rem;
+        border: 1px solid var(--border-bright);
+        background: #0a0e16;
+        overflow: hidden;
+      }
+
+      .tablist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        padding: 0.55rem 0.75rem;
+        background: #0d121d;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tab {
+        appearance: none;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        padding: 0.45rem 0.85rem;
+        border-radius: 0.45rem;
+        cursor: pointer;
+      }
+
+      .tab:focus-visible {
+        outline: 2px solid var(--cyan);
+        outline-offset: 2px;
+      }
+
+      .tab[aria-selected='true'] {
+        background: var(--cyan-soft);
+        border-color: rgba(34, 211, 238, 0.32);
+        color: var(--cyan);
+      }
+
+      .tabpanel {
+        display: none;
+        margin: 0;
+        padding: 1.25rem 1.4rem;
+        overflow-x: auto;
+        font-family: var(--font-mono);
+        font-size: 0.81rem;
+        line-height: 1.62;
+        color: #dbeafe;
+      }
+
+      .tabpanel.active {
+        display: block;
+      }
+
+      .code-foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.75rem 1.25rem;
+        background: #0d121d;
+        border-top: 1px solid var(--border);
+        font-size: 0.82rem;
+        color: var(--text-muted);
+      }
+
+      .code-foot code {
+        font-family: var(--font-mono);
+        color: var(--emerald);
+      }
+
+      .code-foot a {
+        color: var(--cyan);
+        font-weight: 600;
       }
 
       /* Differentiator 2-col */
@@ -477,56 +685,6 @@ cmake --build build -j"$(nproc)"
 
       .diff-card li + li {
         margin-top: 0.5rem;
-      }
-
-      /* Code tabs */
-      .code-shell {
-        border-radius: 0.75rem;
-        border: 1px solid var(--border-bright);
-        background: #0a0e16;
-        overflow: hidden;
-      }
-
-      .tablist {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.25rem;
-        padding: 0.55rem 0.75rem;
-        background: #0d121d;
-        border-bottom: 1px solid var(--border);
-      }
-
-      .tab {
-        appearance: none;
-        border: 1px solid transparent;
-        background: transparent;
-        color: var(--text-muted);
-        font-family: var(--font-mono);
-        font-size: 0.8rem;
-        padding: 0.45rem 0.85rem;
-        border-radius: 0.45rem;
-        cursor: pointer;
-      }
-
-      .tab[aria-selected='true'] {
-        background: var(--cyan-soft);
-        border-color: rgba(34, 211, 238, 0.32);
-        color: var(--cyan);
-      }
-
-      .tabpanel {
-        display: none;
-        margin: 0;
-        padding: 1.25rem 1.4rem;
-        overflow-x: auto;
-        font-family: var(--font-mono);
-        font-size: 0.82rem;
-        line-height: 1.65;
-        color: #dbeafe;
-      }
-
-      .tabpanel.active {
-        display: block;
       }
 
       /* Bento cards */
@@ -589,7 +747,6 @@ cmake --build build -j"$(nproc)"
         color: var(--text-muted);
       }
 
-      /* Footer */
       footer {
         border-top: 1px solid var(--border);
         padding: 2rem 0 3rem;
@@ -650,20 +807,19 @@ cmake --build build -j"$(nproc)"
       <section class="hero">
         <div class="eyebrow">
           <span class="eyebrow-dot"></span>
-          Apache-2.0 · C++20 · Sub-ms ONNX Inference
+          Apache-2.0 · C++20 · In-Process ONNX Runtime · Linux
         </div>
-        <h1>The trading engine built for <span class="grad">predictive models.</span></h1>
+        <h1>C++20 execution built for <span class="grad">predictive models.</span></h1>
         <p class="lead">
-          KeronisEngine trades any strategy, with the hard engineering of predictive modeling built into the core:
-          streaming C++ feature state machines, sub-millisecond ONNX Runtime inference from tick arrival,
-          and identical code across feature generation, backtesting, paper trading, and live execution.
-          Supports crypto, Polymarket, and extends cleanly to sports-betting or any order-book market.
+          Focus on finding alpha—not rebuilding feature pipelines and execution plumbing.
+          KeronisEngine runs streaming C++ feature state machines and ONNX Runtime inference
+          directly on tick arrival across crypto, Polymarket, and extensible event or sports markets.
         </p>
 
         <div class="actions">
-          <a href="/quickstart/" class="btn btn-primary">Get Started →</a>
-          <a href="/architecture/" class="btn btn-secondary">Read Architecture</a>
-          <a href="/comparison/" class="btn btn-secondary">vs. NautilusTrader</a>
+          <a href="/strategies/#binance-onnx-perp" class="btn btn-primary">Binance ONNX Example →</a>
+          <a href="/strategies/#polymarket-digital-options" class="btn btn-secondary">Polymarket Digital Options</a>
+          <a href="/quickstart/" class="btn btn-secondary">Quickstart</a>
         </div>
 
         <div class="cmd-bar">
@@ -674,56 +830,208 @@ cmake --build build -j"$(nproc)"
 
         <div class="metrics">
           <div class="metric">
-            <div class="metric-val"><span>&lt;1 ms</span> tick-to-order</div>
-            <div class="metric-lbl">In-process C++ feature update + ONNX inference + order decision</div>
+            <div class="metric-val"><span>&lt;1 ms</span> in-process path</div>
+            <div class="metric-lbl">Streaming feature update + ONNX scoring + order decision on tick arrival</div>
           </div>
           <div class="metric">
             <div class="metric-val"><span>10,000+</span> msg/s</div>
-            <div class="metric-lbl">Full Binance live feeds + continuous scoring on a ~$100 server</div>
+            <div class="metric-lbl">Full Binance live feeds + continuous model scoring on a ~$100 Linux box</div>
           </div>
           <div class="metric">
-            <div class="metric-val"><span>~1.5 ns</span> / update</div>
-            <div class="metric-lbl"><code>RingBufferBook::apply_bid</code> on Core Ultra 9 285K (strict IEEE-754)</div>
+            <div class="metric-val"><span>~1.5 ns</span> / op (book)</div>
+            <div class="metric-lbl"><code>RingBufferBook::apply_bid</code> microbenchmark (Core Ultra 9 285K, strict IEEE-754)</div>
           </div>
           <div class="metric">
-            <div class="metric-val"><span>1</span> codebase</div>
-            <div class="metric-lbl">Same C++ state machines in training panels, backtest, paper &amp; live</div>
+            <div class="metric-val"><span>1</span> feature engine</div>
+            <div class="metric-lbl">Same C++ <code>StrategyStateMachine</code> in training panels, backtest, paper &amp; live</div>
           </div>
         </div>
       </section>
 
       <section>
-        <div class="sec-kicker">Predictive-Model Pipeline</div>
-        <h2>From market tick to ONNX score in one process</h2>
+        <div class="sec-kicker">Architecture</div>
+        <h2>Offline training loop meets sub-ms online execution</h2>
         <p class="sec-desc">
-          Most engines leave ML pipelines to external Python services—introducing network hops and silent train/serve skew.
-          KeronisEngine runs streaming feature computation and ONNX Runtime directly in the C++ execution path.
+          Both paths link the exact same compiled <code>StrategyStateMachine</code> code—eliminating
+          feature-code drift between offline Parquet training panels and live ONNX inference.
         </p>
-        <div class="pipeline">
-          <div class="pipe-step">
-            <div class="pipe-num">01 / INGEST</div>
-            <h3>Market Data</h3>
-            <p>Live WebSockets (crypto, Polymarket CLOB, Lighter L2) or partitioned Parquet files.</p>
+        <div class="diagram-shell">
+          <svg
+            viewBox="0 0 1060 320"
+            role="img"
+            aria-label="KeronisEngine architecture showing the offline training loop sharing StrategyStateMachine with the online execution path"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <defs>
+              <marker id="arrow-cyan" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#22d3ee" />
+              </marker>
+              <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#34d399" />
+              </marker>
+              <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 1 L 10 5 L 0 9 z" fill="#fbbf24" />
+              </marker>
+            </defs>
+
+            <!-- Track labels -->
+            <text x="16" y="28" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">OFFLINE TRAINING LOOP</text>
+            <text x="16" y="188" fill="#22d3ee" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" letter-spacing="1.2">ONLINE EXECUTION PATH (SINGLE C++20 PROCESS)</text>
+
+            <!-- Shared C++ State Machine highlight column -->
+            <rect x="404" y="38" width="206" height="264" rx="12" fill="rgba(34, 211, 238, 0.05)" stroke="rgba(34, 211, 238, 0.35)" stroke-dasharray="5 5" />
+            <text x="507" y="168" text-anchor="middle" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5" font-weight="600">SHARED C++ BINARY CODE</text>
+
+            <!-- TOP ROW: Offline -->
+            <rect x="16" y="48" width="166" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="30" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Partitioned Parquet</text>
+            <text x="30" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">OHLCV · Trades · L2</text>
+
+            <line x1="182" y1="84" x2="210" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
+
+            <rect x="216" y="48" width="164" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="230" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">historical_feature_gen</text>
+            <text x="230" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">MergeIterator replay</text>
+
+            <line x1="380" y1="84" x2="412" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
+
+            <rect x="418" y="48" width="178" height="72" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
+            <text x="432" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">StrategyStateMachine</text>
+            <text x="432" y="96" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">react() → emit_state()</text>
+
+            <line x1="596" y1="84" x2="628" y2="84" stroke="#34d399" stroke-width="1.8" marker-end="url(#arrow-emerald)" />
+
+            <rect x="634" y="48" width="184" height="72" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="648" y="75" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Train in Python</text>
+            <text x="648" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">LightGBM · XGB · PyTorch</text>
+
+            <line x1="818" y1="84" x2="848" y2="84" stroke="#fbbf24" stroke-width="1.8" marker-end="url(#arrow-amber)" />
+
+            <rect x="854" y="48" width="190" height="72" rx="10" fill="#17140d" stroke="rgba(251, 191, 36, 0.5)" />
+            <text x="868" y="75" fill="#fde68a" font-family="Inter, sans-serif" font-size="13" font-weight="700">Export model.onnx</text>
+            <text x="868" y="96" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Versioned artifact</text>
+
+            <!-- Dashed drop from model.onnx into ONNX Runtime -->
+            <path d="M 949 120 L 949 154 L 726 154 L 726 202" fill="none" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#arrow-amber)" />
+
+            <!-- BOTTOM ROW: Online -->
+            <rect x="16" y="208" width="166" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="30" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Market Tick</text>
+            <text x="30" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">Live WS or Parquet</text>
+            <text x="30" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">Crypto · Polymarket</text>
+
+            <line x1="182" y1="247" x2="210" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
+
+            <rect x="216" y="208" width="164" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="230" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">RingBufferBook</text>
+            <text x="230" y="256" fill="#94a3b8" font-family="JetBrains Mono, monospace" font-size="10.5">16B POD · bitmap walk</text>
+            <text x="230" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">~1.5 ns/op microbench</text>
+
+            <line x1="380" y1="247" x2="412" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
+
+            <rect x="418" y="208" width="178" height="78" rx="10" fill="#0c1c26" stroke="#22d3ee" stroke-width="1.4" />
+            <text x="432" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">StrategyStateMachine</text>
+            <text x="432" y="256" fill="#67e8f9" font-family="JetBrains Mono, monospace" font-size="10.5">Same compiled class</text>
+            <text x="432" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">StateMachineDispatcher</text>
+
+            <line x1="596" y1="247" x2="628" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
+
+            <rect x="634" y="208" width="184" height="78" rx="10" fill="#0e131e" stroke="#28364d" />
+            <text x="648" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">ONNX Runtime</text>
+            <text x="648" y="256" fill="#fde68a" font-family="JetBrains Mono, monospace" font-size="10.5">OnnxModel::predict()</text>
+            <text x="648" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">AtomicSignal → Strategy</text>
+
+            <line x1="818" y1="247" x2="848" y2="247" stroke="#22d3ee" stroke-width="1.8" marker-end="url(#arrow-cyan)" />
+
+            <rect x="854" y="208" width="190" height="78" rx="10" fill="#0d1d18" stroke="rgba(52, 211, 153, 0.5)" />
+            <text x="868" y="236" fill="#eef2f7" font-family="Inter, sans-serif" font-size="13" font-weight="700">Risk &amp; Execution</text>
+            <text x="868" y="256" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="10.5">Backtest · Paper · Live</text>
+            <text x="868" y="272" fill="#64748b" font-family="JetBrains Mono, monospace" font-size="10">QuoteHolds · Native Sign</text>
+          </svg>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-kicker">Flagship Examples</div>
+        <h2>Two real, compiled strategies to learn from</h2>
+        <p class="sec-desc">
+          Both examples compile into the engine, are verified by Catch2 registration tests, and show
+          the exact APIs used in production—without legacy clutter.
+        </p>
+        <div class="examples-grid">
+          <div class="example-card cyan-accent">
+            <div class="example-head">
+              <span class="pill">binance_onnx_perp</span>
+              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Crypto Perps · ONNX</span>
+            </div>
+            <h3>Binance Perpetuals ONNX Strategy</h3>
+            <p class="summary">
+              End-to-end predictive-model pattern: compute streaming features, score an ONNX model
+              off the tick thread via <code>AtomicSignal</code>, and execute risk-checked orders.
+            </p>
+            <ul class="spec-list">
+              <li><strong>Features</strong><span><code>WindowedTakerFlowSM</code> rolling buy/sell notional and trade counts</span></li>
+              <li><strong>Inference</strong><span><code>OnnxModel::predict()</code> inside <code>compute_predictions_callback</code></span></li>
+              <li><strong>Execution</strong><span><code>Core::StrategyHelpers</code> market entry/exit (standalone in backtest &amp; <code>PaperExchange</code>; live Binance via configured proxy)</span></li>
+            </ul>
+            <div class="example-links">
+              <a href="/strategies/#binance-onnx-perp">Read walkthrough →</a>
+              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp">View C++ source</a>
+            </div>
           </div>
-          <div class="pipe-step">
-            <div class="pipe-num">02 / BOOK</div>
-            <h3>RingBufferBook</h3>
-            <p>Tick-indexed 16-byte POD slots, bitmap + <code>__builtin_ctzll</code> depth walks, lazy mmap pages.</p>
+
+          <div class="example-card emerald-accent">
+            <div class="example-head">
+              <span class="pill emerald">polymarket_digital</span>
+              <span style="font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-dim);">Prediction Markets · Native CLOB</span>
+            </div>
+            <h3>Polymarket Digital Options Strategy</h3>
+            <p class="summary">
+              Cross-venue binary options pattern: price <code>P(S_T &gt; K)</code> from a live Binance
+              reference price and buy YES or NO on the Polymarket CLOB when edge exceeds threshold.
+            </p>
+            <ul class="spec-list">
+              <li><strong>Inputs</strong><span>Live Binance perp spot + Polymarket multi-outcome BBA (<code>read_outcome_bba</code>)</span></li>
+              <li><strong>Pricing</strong><span>Analytical digital fair value (swap <code>fair_prob_yes()</code> with <code>OnnxModel::predict()</code>)</span></li>
+              <li><strong>Execution</strong><span>Native Polymarket CLOB <code>LIMIT</code> orders with <code>clob_id</code>, tick rounding, and inventory caps</span></li>
+            </ul>
+            <div class="example-links">
+              <a href="/strategies/#polymarket-digital-options">Read walkthrough →</a>
+              <a href="https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp">View C++ source</a>
+            </div>
           </div>
-          <div class="pipe-step">
-            <div class="pipe-num">03 / FEATURES</div>
-            <h3>StrategyStateMachine</h3>
-            <p>Streaming C++ feature engine shared identically with offline <code>historical_feature_gen</code>.</p>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-kicker">Compiled C++ Code</div>
+        <h2>Read the actual strategy and state machine code</h2>
+        <p class="sec-desc">
+          Register strategies and state machines by name from your own private directory.
+          Use click or Left/Right arrow keys to switch tabs.
+        </p>
+        <div class="code-shell">
+          <div class="tablist" role="tablist" aria-label="Compiled C++ examples">
+            <button class="tab" role="tab" aria-selected="true" tabindex="0" aria-controls="panel-binance" id="tab-binance">
+              1. binance_onnx_perp.cpp
+            </button>
+            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-poly" id="tab-poly">
+              2. polymarket_digital.cpp
+            </button>
+            <button class="tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="panel-sm" id="tab-sm">
+              3. spread_sm.cpp
+            </button>
           </div>
-          <div class="pipe-step">
-            <div class="pipe-num">04 / SCORE</div>
-            <h3>ONNX Runtime</h3>
-            <p><code>OnnxModel::predict()</code> scores LightGBM, XGBoost, or PyTorch models in-process.</p>
-          </div>
-          <div class="pipe-step">
-            <div class="pipe-num">05 / EXECUTE</div>
-            <h3>Backtest · Paper · Live</h3>
-            <p>Risk-checked routing to <code>BacktestState</code>, <code>PaperExchange</code>, or native venue signers.</p>
+
+          <pre class="tabpanel active" id="panel-binance" role="tabpanel" aria-labelledby="tab-binance"><code set:text={codeBinanceOnnx}></code></pre>
+
+          <pre class="tabpanel" id="panel-poly" role="tabpanel" aria-labelledby="tab-poly"><code set:text={codePolymarketDigital}></code></pre>
+
+          <pre class="tabpanel" id="panel-sm" role="tabpanel" aria-labelledby="tab-sm"><code set:text={codeSpreadSm}></code></pre>
+
+          <div class="code-foot">
+            <span>Compile private strategies without forking: <code>-DKERONIS_STRATEGY_DIRS="/path/to/private"</code></span>
+            <a href="/strategies/#building-external-strategies">Out-of-tree build guide →</a>
           </div>
         </div>
       </section>
@@ -739,10 +1047,10 @@ cmake --build build -j"$(nproc)"
           <div class="diff-card accent">
             <h3>KeronisEngine (Predictive-Model Native)</h3>
             <ul>
-              <li><strong>Zero train/serve skew by construction:</strong> C++ <code>StrategyStateMachine</code>s generate offline Parquet training panels and serve live inference with the same compiled code.</li>
+              <li><strong>Eliminates feature-code drift between training and serving:</strong> C++ <code>StrategyStateMachine</code>s generate offline Parquet training panels and serve live inference with the same compiled code.</li>
               <li><strong>Sub-millisecond ONNX in-process:</strong> Score gradient boosters or neural nets directly on tick arrival without IPC or Python GIL overhead.</li>
-              <li><strong>Multi-market &amp; prediction-market native:</strong> Built-in Polymarket CLOB execution, multi-outcome tickers, and queue-notional backtesting—trivially extensible to sports-betting exchanges.</li>
-              <li><strong>Commodity hardware footprint:</strong> Full Binance live feeds (10k+ msg/s) + continuous predictions on a single ~$100 Linux box.</li>
+              <li><strong>Prediction-market &amp; event-market native:</strong> Built-in Polymarket CLOB execution, multi-outcome tickers, and queue-notional backtesting—extensible to sports-betting exchanges.</li>
+              <li><strong>Commodity hardware footprint:</strong> Full Binance live feeds (10k+ msg/s) + continuous predictions on a single ~$100 Linux server.</li>
             </ul>
           </div>
           <div class="diff-card">
@@ -753,34 +1061,6 @@ cmake --build build -j"$(nproc)"
               <li><strong>Keep your alpha private:</strong> With KeronisEngine, external strategies and state machines compile in via <code>-DKERONIS_STRATEGY_DIRS</code> without forking.</li>
             </ul>
           </div>
-        </div>
-      </section>
-
-      <section>
-        <div class="sec-kicker">Code</div>
-        <h2>Write features and strategies once. Never fork the engine.</h2>
-        <p class="sec-desc">
-          Register state machines and strategies by name from your own private directory.
-          Both run unchanged in <code>historical_feature_gen</code>, <code>backtest_runner</code>, and <code>live_infra</code>.
-        </p>
-        <div class="code-shell">
-          <div class="tablist" role="tablist" aria-label="Code examples">
-            <button class="tab" role="tab" aria-selected="true" aria-controls="panel-strategy" id="tab-strategy">
-              1. ONNX Strategy
-            </button>
-            <button class="tab" role="tab" aria-selected="false" aria-controls="panel-sm" id="tab-sm">
-              2. Feature State Machine
-            </button>
-            <button class="tab" role="tab" aria-selected="false" aria-controls="panel-build" id="tab-build">
-              3. Out-of-Tree Build
-            </button>
-          </div>
-
-          <pre class="tabpanel active" id="panel-strategy" role="tabpanel" aria-labelledby="tab-strategy"><code set:text={codeStrategy}></code></pre>
-
-          <pre class="tabpanel" id="panel-sm" role="tabpanel" aria-labelledby="tab-sm"><code set:text={codeSm}></code></pre>
-
-          <pre class="tabpanel" id="panel-build" role="tabpanel" aria-labelledby="tab-build"><code set:text={codeBuild}></code></pre>
         </div>
       </section>
 
@@ -810,8 +1090,8 @@ cmake --build build -j"$(nproc)"
           </a>
           <a href="/state-machines/" class="card">
             <div class="card-tag">historical_feature_gen</div>
-            <h3>7 Bundled State Machines</h3>
-            <p>Includes <code>six_venue_order</code>, <code>global_bba</code>, <code>taker_flow</code>, <code>windowed_taker_flow</code>, <code>spread</code>, <code>bba_imbalance_ratio</code>, and <code>polymarket_trade_flow</code>.</p>
+            <h3>2 Teaching State Machines</h3>
+            <p>Clean, tested reference implementations—<code>windowed_taker_flow</code> (rolling trade-flow buckets) and <code>spread</code> (BBA spread with warmup guard)—ready to copy as templates.</p>
           </a>
           <a href="/control-server/" class="card">
             <div class="card-tag">observability</div>
@@ -826,7 +1106,7 @@ cmake --build build -j"$(nproc)"
         <div class="scope-box">
           <div>
             <strong>Standalone today</strong>
-            <p>Core engine, 225+ Catch2 tests, 7 state machines, ONNX inference, <code>backtest_runner</code>, <code>historical_feature_gen</code>, and <code>PaperExchange</code>.</p>
+            <p>Core engine, 260+ Catch2 tests, 2 teaching state machines, 2 flagship example strategies, ONNX inference, <code>backtest_runner</code>, <code>historical_feature_gen</code>, and <code>PaperExchange</code>.</p>
           </div>
           <div>
             <strong>Platform</strong>
@@ -845,6 +1125,7 @@ cmake --build build -j"$(nproc)"
         <div>KeronisEngine · Apache-2.0 License · Provided as-is without warranty.</div>
         <div class="foot-links">
           <a href="/quickstart/">Quickstart</a>
+          <a href="/strategies/">Strategies</a>
           <a href="/architecture/">Architecture</a>
           <a href="/llms.txt">llms.txt</a>
           <a href="/llms-full.txt">llms-full.txt</a>
@@ -854,7 +1135,6 @@ cmake --build build -j"$(nproc)"
     </footer>
 
     <script>
-      // Copy docker command
       const copyBtn = document.getElementById('copy-cmd');
       const cmdEl = document.getElementById('docker-cmd');
       copyBtn?.addEventListener('click', async () => {
@@ -865,16 +1145,37 @@ cmake --build build -j"$(nproc)"
         } catch {}
       });
 
-      // Accessible tabs
       const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
       const panels = Array.from(document.querySelectorAll('[role="tabpanel"]'));
-      tabs.forEach((tab) => {
-        tab.addEventListener('click', () => {
-          tabs.forEach((t) => t.setAttribute('aria-selected', 'false'));
-          panels.forEach((p) => p.classList.remove('active'));
-          tab.setAttribute('aria-selected', 'true');
-          const target = document.getElementById(tab.getAttribute('aria-controls') || '');
-          target?.classList.add('active');
+
+      function activateTab(nextTab, shouldFocus = false) {
+        tabs.forEach((t) => {
+          const selected = t === nextTab;
+          t.setAttribute('aria-selected', selected ? 'true' : 'false');
+          t.setAttribute('tabindex', selected ? '0' : '-1');
+        });
+        panels.forEach((p) => p.classList.remove('active'));
+        const target = document.getElementById(nextTab.getAttribute('aria-controls') || '');
+        target?.classList.add('active');
+        if (shouldFocus) nextTab.focus();
+      }
+
+      tabs.forEach((tab, idx) => {
+        tab.addEventListener('click', () => activateTab(tab));
+        tab.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            activateTab(tabs[(idx + 1) % tabs.length], true);
+          } else if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            activateTab(tabs[(idx - 1 + tabs.length) % tabs.length], true);
+          } else if (e.key === 'Home') {
+            e.preventDefault();
+            activateTab(tabs[0], true);
+          } else if (e.key === 'End') {
+            e.preventDefault();
+            activateTab(tabs[tabs.length - 1], true);
+          }
         });
       });
     </script>

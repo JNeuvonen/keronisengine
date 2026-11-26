@@ -28,60 +28,33 @@ Documentation: **[engine.keronis.ai](https://engine.keronis.ai/)** · Machine-re
 | `backtest_runner` | Offline Parquet replay; outputs `summary.json`, `trades.json`, `equity_curve.json` |
 | `historical_feature_gen` | Offline replay of registered state machines to build Parquet ML training sets |
 | `engine_control_server` | Embedded localhost HTTP server for inspecting orders, inventory, books, and health |
-| `strategies/` | Bundled examples: `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
+| `strategies/` | Flagship examples: `binance_onnx_perp`, `polymarket_digital`; plus `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
 
 ## Streaming features → ONNX → order
 
+Excerpt from [`binance_onnx_perp.cpp`](src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp) (also see [`polymarket_digital.cpp`](src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp) for cross-venue Polymarket CLOB execution):
+
 ```cpp
-#include "market_data/state_machine_dispatcher.h"
-#include "market_making/strategy_helpers.h"
-#include "market_making/strategy_registry.h"
-#include "onnx_model.h"
-
-namespace {
-OnnxModel& model() {
-    static OnnxModel instance("model.onnx");
-    return instance;
-}
-
-std::vector<Core::StrategyDecision> on_market_event(
-    Core::Engine& engine, Core::Strategy& strategy,
-    std::optional<Core::MarketEvent>) {
-    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine("taker_flow");
+void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {
+    auto sm = MarketData::StateMachineDispatcher::get_instance().get_machine(
+        "windowed_taker_flow");
     auto features = sm ? sm->emit_state() : std::nullopt;
-    if (!features) return {};
+    if (!features || features->empty()) return;
 
-    const float score = model().predict(*features);
-    std::vector<Core::StrategyDecision> decisions;
-    for (auto& [symbol, ticker] : strategy.trade_tickers) {
-        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
-        const auto& em = ticker->exchange_and_markets.front();
-        const auto price = engine.get_price(symbol, em.exchange_name, em.market_type);
-        if (!price || !ticker->get_orders(false).empty()) continue;
-
-        Core::StrategyDecision decision;
-        decision.symbol = symbol;
-        const auto trades = ticker->get_trades(false);
-        if (trades.empty() && score > 0.65f) {
-            Core::StrategyHelpers::submit_market_order(
-                engine, strategy, *ticker, Core::OrderSide::BUY, *price,
-                mpfr::mpreal(0.01), decision);
-        } else if (!trades.empty() && score < 0.45f) {
-            Core::StrategyHelpers::close_trade_market(
-                engine, strategy, *ticker, trades.front(), *price, decision);
+    float score = 0.5f;
+    if (!strategy.strategy_config.strategy_models.empty()) {
+        auto model = get_or_load_model(
+            strategy.strategy_config.strategy_models.front().path_to_model);
+        if (model && features->size() == model->get_input_size()) {
+            score = model->predict(*features);
         }
-        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
     }
-    return decisions;
-}
 
-void bind_ml_strategy(Core::Strategy& strategy) {
-    strategy.strategy_callback = on_market_event;
-    strategy.compute_predictions_callback = [](Core::Engine&, Core::Strategy&) {};
+    const long long now_ms = engine.get_time();
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        ticker->atomic_signal_main.store(score, now_ms);
+    }
 }
-}  // namespace
-
-KERONIS_REGISTER_STRATEGY("ml_taker", bind_ml_strategy);
 ```
 
 ## Build and test
@@ -97,7 +70,7 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build -j"$(nproc)"
 
 ./build/bin/trading_engine_tests
-./build/bin/live_infra_tests "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
+./build/bin/live_infra_tests "[state_machines],[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
 ```
 
 Run the bundled `sma_crossover` backtest:

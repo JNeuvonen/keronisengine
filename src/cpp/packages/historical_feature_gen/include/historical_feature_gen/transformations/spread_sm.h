@@ -11,6 +11,7 @@ namespace HistoricalFeatureGen {
 
 class SpreadSM : public MarketData::StrategyStateMachine {
    public:
+    std::string get_name() const override { return "spread"; }
     void configure(const nlohmann::json& params) override;
     void initialize_symbol_states() override;
     void react_impl(const MarketData::MarketEvent& event) override;
@@ -19,11 +20,12 @@ class SpreadSM : public MarketData::StrategyStateMachine {
 
    private:
     struct SymbolState {
+        bool has_bba = false;
         double last_bid = 0.0;
         double last_ask = 0.0;
     };
 
-    // sorted map so emit order is deterministic
+    // Sorted map so emitted feature order is deterministic.
     std::map<std::string, SymbolState> symbol_states_;
 };
 
