@@ -4,17 +4,26 @@
 
 ## 1. Start PostgreSQL, NATS, and the bundled venue proxy
 
-`deploy/docker-compose.yml` starts PostgreSQL 16, NATS, and `ccxt_proxy` (`src/py/cpp_live_proxy`) all bound to `127.0.0.1`. On first boot, Postgres loads `deploy/schema.sql` and seeds a paper account plus the `test_quoter` strategy via `deploy/seed_paper_strategy.sql`:
+Initialize a local PostgreSQL 16 database with `deploy/schema.sql` and seed a paper account plus the `test_quoter` strategy via `deploy/seed_paper_strategy.sql`:
 
 ```bash
 cd deploy
 cp .env.example .env
 cp accounts.example.json accounts.json
 chmod 600 accounts.json
-docker compose up -d --build
+
+createdb keronis
+psql -d keronis -f schema.sql
+psql -d keronis -f seed_paper_strategy.sql
 ```
 
-You can also run `cpp_live_proxy` directly in a Python 3.12 virtualenv:
+Start `nats-server` bound to localhost with the token from `deploy/.env`:
+
+```bash
+nats-server -a 127.0.0.1 -p 4222 --auth keronis_dev_nats_token
+```
+
+Run `cpp_live_proxy` in a Python 3.12 virtualenv:
 
 ```bash
 python3 -m venv .proxy-venv

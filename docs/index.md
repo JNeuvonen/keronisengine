@@ -10,7 +10,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 
 | Page | Covers |
 |---|---|
-| [Quickstart](quickstart.md) | Docker image, native Linux CMake/vcpkg build, unit tests, and the synthetic `sma_crossover` backtest. |
+| [Quickstart](quickstart.md) | Native Linux CMake/vcpkg build (`make test`), unit tests, and the synthetic `sma_crossover` backtest. |
 | [Comparison](comparison.md) | Architectural tradeoffs relative to NautilusTrader and HftBacktest. |
 | [FAQ](faq.md) | Direct Q&A on design choices, ONNX inference, hardware, venues, and live operations. |
 
@@ -26,7 +26,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 
 | Page | Covers |
 |---|---|
-| [Live & Paper Trading](live-and-paper.md) | Docker Compose stack (PostgreSQL, NATS, `cpp_live_proxy`), `PaperExchange` fill model, durable `QuoteHolds`, and venue setup. |
+| [Live & Paper Trading](live-and-paper.md) | Local PostgreSQL + NATS + `cpp_live_proxy` setup, `PaperExchange` fill model, durable `QuoteHolds`, and venue configuration. |
 | [Control Server API](control-server.md) | Embedded localhost HTTP endpoints (`/control/engine/*`), health checks, and gated controls. |
 | [Configuration](configuration.md) | Environment variables for `live_infra` and `export_strategy_config`, plus backtest `config.json` schema. |
 
@@ -51,7 +51,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 ## Included in the repository
 
 - **Platform:** Linux, C++20 (engine), Rust (Hyperliquid signer), Python 3.12 (bundled `cpp_live_proxy`).
-- **Examples & tests:** 260+ Catch2 unit tests, 2 streaming feature templates (`windowed_taker_flow`, `spread`), 3 compiled example strategies (`polymarket_digital`, `binance_onnx_perp`, `cross_venue_arb`), `sma_crossover` quickstart backtest, and `deploy/docker-compose.yml`.
+- **Examples & tests:** 260+ Catch2 unit tests, 2 streaming feature templates (`windowed_taker_flow`, `spread`), 3 compiled example strategies (`polymarket_digital`, `binance_onnx_perp`, `cross_venue_arb`), `sma_crossover` quickstart backtest, and `deploy/` SQL schema & config templates.
 - **Machine-readable docs:** [`/llms.txt`](https://engine.keronis.ai/llms.txt) and [`/llms-full.txt`](https://engine.keronis.ai/llms-full.txt).
 
 !!! warning "Disclaimer"

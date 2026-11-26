@@ -1,20 +1,5 @@
 # Quickstart
 
-## Fast path: Docker
-
-If you want to run the tests and example backtest without installing C++ build dependencies locally:
-
-```bash
-# Run the core engine test suite (225 test cases)
-docker run --rm ghcr.io/jneuvonen/keronisengine:latest trading_engine_tests
-
-# Run the bundled SMA crossover backtest
-docker run --rm ghcr.io/jneuvonen/keronisengine:latest \
-  ./examples/quickstart_backtest/run.sh /src/build/bin/backtest_runner
-```
-
-*(You can also build the image locally with `docker build -t keronisengine .` — note that a cold local Docker build compiles Arrow, Parquet, and vcpkg dependencies from source and takes 30+ minutes.)*
-
 ## Native build (Linux)
 
 ### Prerequisites

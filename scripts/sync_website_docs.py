@@ -10,7 +10,7 @@ from pathlib import Path
 # (and retained in docs/ for GitHub browsing and llms-full.txt).
 PAGES = {
     "index.md": ("docs.md", "Documentation", "Documentation hub for KeronisEngine: quickstart, strategies, streaming feature state machines, ONNX inference, and live operations."),
-    "quickstart.md": ("quickstart.md", "Quickstart", "Build KeronisEngine via Docker or native CMake/vcpkg, run unit tests, and execute the example backtest."),
+    "quickstart.md": ("quickstart.md", "Quickstart", "Build KeronisEngine natively on Linux with CMake/vcpkg, run unit tests, and execute the example backtest."),
     "strategies.md": ("strategies.md", "Strategies", "Write and register out-of-tree C++20 strategies with KERONIS_REGISTER_STRATEGY and -DKERONIS_STRATEGY_DIRS."),
     "state-machines.md": ("state-machines.md", "State Machines & ONNX", "Build streaming C++ StrategyStateMachine feature engines and run sub-millisecond ONNX Runtime inference."),
     "live-and-paper.md": ("live-and-paper.md", "Live & Paper Trading", "Run live_infra with PostgreSQL, NATS, PaperExchange, QuoteHolds, and native venue clients."),

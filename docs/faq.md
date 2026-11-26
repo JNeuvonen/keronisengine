@@ -69,7 +69,7 @@ Isolating workloads prevents slow operations from stalling latency-sensitive one
 
 ### Does it run on macOS or Windows?
 
-Linux is the supported platform for native builds and production deployment. On macOS or Windows, use the prebuilt Docker image (`ghcr.io/jneuvonen/keronisengine:latest`) to run tests, backtests, and development builds. See [Quickstart](quickstart.md).
+Linux is the target platform for building and running KeronisEngine. On macOS or Windows, build and run inside a Linux VM, WSL2, or a dedicated Linux host. See [Quickstart](quickstart.md).
 
 ---
 

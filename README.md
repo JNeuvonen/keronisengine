@@ -85,7 +85,7 @@ See [Quickstart](https://engine.keronis.ai/quickstart/), [Architecture](https://
 
 ## Status and disclaimer
 
-The full stack ships in this repository: C++20 engine, 260+ Catch2 tests, streaming feature state machines, ONNX Runtime inference, `backtest_runner`, `historical_feature_gen`, `PaperExchange`, `deploy/docker-compose.yml` (PostgreSQL + NATS + `cpp_live_proxy`), and `src/py/cpp_live_proxy` for CCXT exchanges, IBKR equities, and venue credentials.
+The full stack ships in this repository: C++20 engine, 260+ Catch2 tests, streaming feature state machines, ONNX Runtime inference, `backtest_runner`, `historical_feature_gen`, `PaperExchange`, `deploy/` PostgreSQL schema and seed templates, and `src/py/cpp_live_proxy` for CCXT exchanges, IBKR equities, and venue credentials.
 
 Provided as-is under Apache-2.0 with no warranty. Automated trading carries risk of financial loss.
 
