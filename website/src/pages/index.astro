@@ -850,41 +850,6 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         color: var(--signal);
       }
 
-      /* Progressive-disclosure documentation index */
-      .doc-index {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        border-top: 1px solid var(--rule);
-      }
-
-      .doc-link {
-        padding: 1.45rem 1.4rem 1.45rem 0;
-        border-bottom: 1px solid var(--rule);
-        transition: color 0.15s ease;
-      }
-
-      .doc-link:not(:nth-child(3n)) {
-        padding-right: 1.75rem;
-      }
-
-      .doc-link:hover h3 {
-        color: var(--accent);
-      }
-
-      .doc-link h3 {
-        margin: 0 0 0.35rem;
-        font-size: 0.96rem;
-        font-weight: 600;
-        transition: color 0.15s ease;
-      }
-
-      .doc-link p {
-        margin: 0;
-        font-size: 0.85rem;
-        color: var(--ink-2);
-        line-height: 1.5;
-      }
-
       footer {
         border-top: 1px solid var(--rule);
         padding: 2.25rem 0 3.25rem;
@@ -924,8 +889,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
           border-bottom: 1px solid var(--rule);
         }
         .pillars,
-        .asset-panel,
-        .doc-index {
+        .asset-panel {
           grid-template-columns: 1fr;
         }
         .doc-link:not(:nth-child(3n)) {
@@ -1337,7 +1301,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       </section>
 
       <!-- Compiled Source Examples -->
-      <section class="band">
+      <section class="band" style="margin-bottom: 4.5rem;">
         <div class="sec-head">
           <div class="kicker">Source Examples</div>
           <h2>Strategy and feature implementation</h2>
@@ -1379,41 +1343,6 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
             <span>Out-of-tree build: <code>-DKERONIS_STRATEGY_DIRS="/path/to/private"</code></span>
             <a href="/strategies/#building-external-strategies" class="inline-link">Build guide →</a>
           </div>
-        </div>
-      </section>
-
-      <!-- Documentation Index -->
-      <section class="band" style="margin-bottom: 3rem;">
-        <div class="sec-head">
-          <div class="kicker">Documentation</div>
-          <h2>System reference</h2>
-        </div>
-
-        <div class="doc-index">
-          <a href="/architecture/" class="doc-link">
-            <h3>Architecture &amp; Internals</h3>
-            <p>Module boundaries, threading, standby handoff, <code>RingBufferBook</code> (~1.5 ns/op), and MPFR arithmetic.</p>
-          </a>
-          <a href="/strategies/" class="doc-link">
-            <h3>Strategies</h3>
-            <p>Walkthroughs of <code>polymarket_digital</code> and <code>binance_onnx_perp</code>, locking rules, and out-of-tree builds.</p>
-          </a>
-          <a href="/state-machines/" class="doc-link">
-            <h3>State Machines &amp; ONNX</h3>
-            <p>Streaming C++ feature state machines, warmup guards, reconnect hooks, and ONNX Runtime sessions.</p>
-          </a>
-          <a href="/live-and-paper/" class="doc-link">
-            <h3>Live, Paper &amp; Proxy</h3>
-            <p>Local PostgreSQL, NATS, and <code>cpp_live_proxy</code> setup, paper fills, and durable quote holds.</p>
-          </a>
-          <a href="/comparison/" class="doc-link">
-            <h3>Comparison</h3>
-            <p>Architectural tradeoffs relative to NautilusTrader and HftBacktest.</p>
-          </a>
-          <a href="/control-server/" class="doc-link">
-            <h3>Control Server &amp; Config</h3>
-            <p>Localhost HTTP endpoints (<code>/control/engine/*</code>), health checks, and runtime configuration.</p>
-          </a>
         </div>
       </section>
     </main>
