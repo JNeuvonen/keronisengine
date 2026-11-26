@@ -22,6 +22,7 @@ struct NormalizedParsedTrade {
     long long latency_ms;
     bool is_buyer_maker;
     std::string trade_id;
+    long long trade_time_ms = 0;  // the venue's match time (Binance T); 0 when the feed has none
 
     nlohmann::json to_json() const;
 

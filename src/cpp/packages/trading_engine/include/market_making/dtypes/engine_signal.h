@@ -9,7 +9,7 @@
 namespace Core {
 
 // One row of engine_signal: an instruction for running engines, applied by the
-// handler registered for its type. Written through db/engine_signals.py.
+// handler registered for its type. Written to the engine_signal table.
 struct EngineSignal {
     long long id = 0;
     std::string signal_type;
@@ -36,12 +36,15 @@ inline const char* engine_signal_status_name(EngineSignalStatus status) {
     return "failed";
 }
 
-// Signal types; db/engine_signals.py mirrors these names.
+// Signal types persisted in the engine_signal table.
 inline constexpr const char* ENGINE_SIGNAL_REMOVE_TRADE = "remove_trade";
 inline constexpr const char* ENGINE_SIGNAL_STOP_MAKING_MARKETS =
     "stop_making_markets";
 inline constexpr const char* ENGINE_SIGNAL_ALT_DATA_CHANGED = "alt_data_changed";
 inline constexpr const char* ENGINE_SIGNAL_STRATEGY_COMMAND = "strategy_command";
+// Read as state by live_infra's QuoteHolds, never through a handler or acked.
+inline constexpr const char* ENGINE_SIGNAL_PULL_QUOTES = "pull_quotes";
+inline constexpr const char* ENGINE_SIGNAL_RESUME_QUOTES = "resume_quotes";
 
 using EngineSignalHandler =
     std::function<EngineSignalOutcome(const EngineSignal&)>;

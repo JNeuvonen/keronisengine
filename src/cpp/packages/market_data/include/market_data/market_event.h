@@ -17,6 +17,8 @@ struct TradeEvent {
     double qty;
     bool is_buyer_maker;
     long long timestamp_ms;
+    long long trade_id = 0;  // the venue's numeric trade id; 0 when it has none
+    long long trade_time_ms = 0;  // the venue's match time; 0 when unknown (timestamp_ms is then the only time)
 };
 
 // OHLCV bar event — used by the simulator's MarketDataReplayer to

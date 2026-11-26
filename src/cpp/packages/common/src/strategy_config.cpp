@@ -6,7 +6,9 @@ namespace {
 
 Core::ExchangeAndMarket exchange_from_json(const nlohmann::json& config,
                                            const std::string& context) {
-    StrictJson::check_keys(config, {"exchange_name", "market_type", "account_id"},
+    StrictJson::check_keys(config,
+                           {"exchange_name", "market_type", "account_id",
+                            "paper_fill_latency_ms"},
                            context);
     Core::ExchangeAndMarket exchange;
     exchange.exchange_name =
@@ -16,6 +18,10 @@ Core::ExchangeAndMarket exchange_from_json(const nlohmann::json& config,
     if (config.contains("account_id")) {
         exchange.account_id =
             StrictJson::require<long long>(config, "account_id", context);
+    }
+    if (config.contains("paper_fill_latency_ms")) {
+        exchange.paper_fill_latency_ms = StrictJson::require<long long>(
+            config, "paper_fill_latency_ms", context);
     }
     return exchange;
 }

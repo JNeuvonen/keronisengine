@@ -95,6 +95,16 @@ class StrategyStateMachine {
                              MarketEvent::Type event_type);
 
     std::string get_persistence_dir() const;
+    // Called by stream_disconnected() for a trade stream, whatever the
+    // machine's declared dependencies. From the health-check thread.
+    virtual void on_trade_stream_disconnected(const std::string& symbol,
+                                              const std::string& exchange_name,
+                                              const std::string& market_type) {
+        (void)symbol; (void)exchange_name; (void)market_type;
+    }
+    // Called about once a second from the state machine syncer thread,
+    // synced or not: for work too slow for the dispatcher thread (REST).
+    virtual void run_background_work() {}
     virtual long long get_latest_event_ts_ms() const { return 0; }
 
     // Per-symbol freshness for multi-symbol SMs. A single global
@@ -112,8 +122,7 @@ class StrategyStateMachine {
     // written to state_machine_health.diagnostic_json. Payload MUST be bounded
     // (soft cap ~10KB at the emitter) — DO NOT return full internal tables;
     // return counts, summary statistics, or most-recently-updated keys.
-    // Default returns {} (column will be null). See
-    // agentic_system/skills/ENGINE_DIAGNOSTICS.md for query patterns.
+    // Default returns {} (column will be null).
     virtual nlohmann::json to_diagnostic_json() const { return {}; }
 
     struct ReferenceState {

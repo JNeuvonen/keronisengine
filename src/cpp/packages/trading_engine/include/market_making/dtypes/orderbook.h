@@ -203,6 +203,8 @@ struct OrderBookUpdate {
     long long timestamp;
     long long sequence_start;
     long long sequence_end;
+    // Binance futures `pu`: the previous message's sequence_end; -1 when the venue sends none.
+    long long prev_sequence_end = -1;
 };
 
 }  // namespace Core

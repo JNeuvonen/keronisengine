@@ -14,13 +14,16 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <unordered_map>
 #include <set>
+#include <unordered_set>
 #include <system_error>
 #include <thread>
 
 #include "binance_utils.h"
 #include "cache_path_utils.h"
 #include "ccxt_proxy.h"
+#include "curl_multi_manager.h"
 #include "ccxt_utils.h"
 #include "chrono_utils.h"
 #include "common_types/constants.h"
@@ -66,8 +69,13 @@
 #include "rate_limiter.h"
 #include "sqlite_cache.h"
 #include "trading/account.h"
+#include "market_data/depth_history.h"
 
 std::mutex db_write_mutex;
+
+// Ack-to-fill latency for depth-modeled paper venues when the strategy's
+// exchanges_list entry sets no paper_fill_latency_ms.
+static constexpr long long kDefaultPaperFillLatencyMs = 450;
 
 static void update_service_health_entry(const std::string &service_name,
                                         const std::string &identifier,
@@ -171,6 +179,13 @@ void Live::StateUpdater::write_db_entries_from_engine_snapshot(
         }
     }
 
+    const auto trade_db_json = [this](const Core::Trade &trade, bool closed) {
+        auto json = trade.to_db_json(true, closed, std::nullopt);
+        // A discretionary paper account opened after startup is known only through its paper strategy.
+        json["is_paper_trade"] = this->is_paper_trade_account(trade.account_id) ||
+                                 this->is_paper_strategy(static_cast<int>(trade.strategy_id));
+        return json;
+    };
     std::vector<nlohmann::json> trades_to_write;
     for (const auto &trade : new_completed_trades) {
         for (const auto &trade_item : trade.second) {
@@ -178,11 +193,10 @@ void Live::StateUpdater::write_db_entries_from_engine_snapshot(
                 existing_live_trade_ids.end()) {
                 PQUtils::update_entry(
                     config.get_db_connection_string(), "trade",
-                    trade_item.to_db_json(true, true, std::nullopt),
+                    trade_db_json(trade_item, true),
                     existing_live_trade_ids[trade_item.id]);
             } else {
-                trades_to_write.push_back(
-                    trade_item.to_db_json(true, true, std::nullopt));
+                trades_to_write.push_back(trade_db_json(trade_item, true));
             }
 
             const std::string key = Core::Utils::get_symbol_exchange_market_key(
@@ -196,8 +210,7 @@ void Live::StateUpdater::write_db_entries_from_engine_snapshot(
     for (const auto &trade_item : active_trades) {
         if (existing_live_trade_ids.find(trade_item.id) ==
             existing_live_trade_ids.end()) {
-            trades_to_write.push_back(
-                trade_item.to_db_json(true, false, std::nullopt));
+            trades_to_write.push_back(trade_db_json(trade_item, false));
         } else {
             const auto &db_json = existing_live_trade_db_json[trade_item.id];
 
@@ -241,7 +254,7 @@ void Live::StateUpdater::write_db_entries_from_engine_snapshot(
             if (open_delta > 3 || closed_delta > 3) {
                 PQUtils::update_entry(
                     config.get_db_connection_string(), "trade",
-                    trade_item.to_db_json(true, false, std::nullopt),
+                    trade_db_json(trade_item, false),
                     existing_live_trade_ids[trade_item.id]);
             }
         }
@@ -762,6 +775,9 @@ Live::StateUpdater::StateUpdater() {
     };
     Core::Engine::getInstance().register_engine_signal_handler(
         Core::ENGINE_SIGNAL_ALT_DATA_CHANGED, apply_alt_data_changed_signal);
+    this->quote_holds_ = std::make_shared<Live::QuoteHolds>(
+        Live::Config::getInstance().get_db_connection_string(),
+        engine_instance);
     this->strategy_command_store = std::make_shared<Live::StrategyCommandStore>(
         Live::Config::getInstance().get_db_connection_string());
     Core::StrategyCommandInbox::instance().set_reporting_enabled(true);
@@ -874,7 +890,7 @@ Live::StateUpdater::StateUpdater() {
     // LOG_ERROR call in this process (from live_infra, common, market_data,
     // state_machines, etc.) into the engine's structured sink so agents can
     // query them from trading_activity_log. See
-    // agentic_system/skills/LOGGING.md. _DISK_ONLY variants skip this sink.
+    // _DISK_ONLY variants skip this sink.
     DiskLogging::set_external_sink([](const char *level, const char *event_type,
                                       const std::string &msg,
                                       const nlohmann::json &metadata) {
@@ -1090,10 +1106,21 @@ std::unique_ptr<Core::Strategy> Live::StateUpdater::build_strategy(
         {
             std::unique_lock lock(this->paper_strategy_ids_mutex);
             this->paper_strategy_ids.insert(strategy.id);
+            this->paper_fill_latency_ms_by_strategy.erase(strategy.id);
+            for (const auto &exchange : strategy.exchanges_list) {
+                if (Core::exchange_from_str(exchange.exchange_name) !=
+                    Core::Exchange::LIGHTER)
+                    continue;
+                this->paper_fill_latency_ms_by_strategy[strategy.id] =
+                    exchange.paper_fill_latency_ms.value_or(
+                        kDefaultPaperFillLatencyMs);
+            }
         }
+        std::unique_lock lock(this->paper_trade_account_ids_mutex);
         for (const auto &exchange : strategy.exchanges_list) {
             if (exchange.account_id.has_value()) {
                 this->paper_only_account_ids.insert(*exchange.account_id);
+                this->paper_trade_account_ids.insert(*exchange.account_id);
             }
         }
     }
@@ -1662,10 +1689,11 @@ Live::StateUpdater::~StateUpdater() {
 }
 
 std::optional<nlohmann::json> Live::StateUpdater::create_order(
-    const Core::Order &order) {
+    const Core::Order &order, int *http_status) {
+    if (http_status != nullptr) *http_status = -1;
     auto it = accounts.find(order.account_id);
     if (it != accounts.end()) {
-        return it->second.create_order(order);
+        return it->second.create_order(order, http_status);
     }
     return std::nullopt;
 }
@@ -1725,6 +1753,11 @@ Live::StateUpdater::create_polymarket_orders_bulk(
 
 bool Live::StateUpdater::is_polymarket_direct_signing_enabled() const {
     return CcxtProxy::instance().is_polymarket_direct_signing_enabled();
+}
+
+bool Live::StateUpdater::is_paper_trade_account(long long account_id) const {
+    std::shared_lock lock(this->paper_trade_account_ids_mutex);
+    return paper_trade_account_ids.contains(account_id);
 }
 
 bool Live::StateUpdater::is_paper_strategy(int strategy_id) const {
@@ -1955,12 +1988,26 @@ void Live::StateUpdater::recover_state_from_disk() {
         return;
     }
     Core::DiscretionaryAccounts::instance().restore(trading_state->discretionary_settlements);
-    Core::Engine::getInstance().recover_state_from_disk(
-        trading_state.value().trades, trading_state.value().orders);
+    std::vector<Core::Trade> trades;
+    std::vector<Core::Order> orders;
+    for (const auto &trade : trading_state->trades) {
+        if (!paper_to_live_strategy_ids.contains(trade.strategy_id)) {
+            trades.push_back(trade);
+        }
+    }
+    for (const auto &order : trading_state->orders) {
+        if (!paper_to_live_strategy_ids.contains(order.strategy_id)) {
+            orders.push_back(order);
+        }
+    }
+    Core::Engine::getInstance().recover_state_from_disk(trades, orders);
     Core::Engine::getInstance().set_unsynced_analytics_data(
         trading_state.value().new_orders, trading_state.value().new_trades,
         trading_state.value().new_orders_cancels,
         trading_state.value().new_order_fills);
+    for (const auto &trade : paper_switch_closed_trades) {
+        Core::Engine::getInstance().add_trade_to_logs(trade);
+    }
     Core::Engine::getInstance().set_tracked_misc_orders(
         trading_state.value().tracked_misc_orders);
 }
@@ -2079,8 +2126,12 @@ void Live::StateUpdater::verify_order_states() {
                     order.exchange_order_id.empty()) {
                     continue;
                 }
-                const auto &invidual_order =
-                    account->query_invidual_order(order);
+                const auto lookup = account->query_invidual_order(order);
+                if (lookup.status ==
+                    CcxtProxy::OrderLookup::Status::UNKNOWN) {
+                    continue;
+                }
+                const auto &invidual_order = lookup.order;
                 if (invidual_order.has_value()) {
                     Core::Engine::getInstance().create_system_log(
                         order.symbol, Core::LOG_LEVEL_INFO,
@@ -2300,6 +2351,9 @@ void Live::StateUpdater::poll_sync_state_to_disk() {
 
 static constexpr long long kPaperBbaMaxAgeMs = 5000;
 static constexpr long long kPaperFeedMaxAgeMs = 10000;
+// No paper pass for this long while paper strategies exist means the paper
+// exchange's worker is stuck.
+static constexpr long long kPaperExchangeStaleMs = 10000;
 
 static double paper_slippage_bps() {
     static const double bps = [] {
@@ -2309,97 +2363,164 @@ static double paper_slippage_bps() {
     return bps;
 }
 
-void Live::StateUpdater::poll_paper_fills() {
-    if (std::chrono::steady_clock::now() - last_paper_fills_poll_time <
-        std::chrono::seconds(1)) {
-        return;
-    }
+Live::PaperVenue Live::StateUpdater::make_paper_venue() {
+    return {
+        .has_paper_strategies =
+            [this] {
+                std::shared_lock lock(paper_strategy_ids_mutex);
+                return !paper_strategy_ids.empty();
+            },
+        .open_orders = [] { return Core::Engine::getInstance().get_orders(); },
+        .is_paper_strategy =
+            [this](int strategy_id) { return is_paper_strategy(strategy_id); },
+        .depth_latency_ms =
+            [this](const Core::Order &order) -> std::optional<long long> {
+            if (order.exchange_enum != Core::Exchange::LIGHTER) return std::nullopt;
+            std::shared_lock lock(paper_strategy_ids_mutex);
+            const auto it = paper_fill_latency_ms_by_strategy.find(order.strategy_id);
+            return it != paper_fill_latency_ms_by_strategy.end()
+                       ? it->second
+                       : kDefaultPaperFillLatencyMs;
+        },
+        .book_at = [](const Core::Order &order, long long ts_ms) {
+            return MarketData::DepthHistory::instance().at(
+                Core::Utils::get_symbol_exchange_market_key(
+                    order.symbol, order.exchange_name, order.market_type),
+                ts_ms);
+        },
+        .quote = [](const Core::Order &order, long long now_ms) {
+            auto &engine = Core::Engine::getInstance();
+            Live::PaperQuote quote;
+            const auto bba = engine.get_bba(order.symbol, order.exchange_name,
+                                            order.market_type);
+            if (bba.has_value() && now_ms - bba->timestamp_ms <= kPaperBbaMaxAgeMs &&
+                bba->best_bid_price > 0 && bba->best_ask_price > 0) {
+                quote.best_bid = bba->best_bid_price;
+                quote.best_ask = bba->best_ask_price;
+            }
+            if (now_ms - engine.get_latest_market_event_time_ms() <=
+                kPaperFeedMaxAgeMs) {
+                const auto last = engine.get_price(order.symbol, order.exchange_name,
+                                                   order.market_type);
+                if (last.has_value() && last.value() > 0) quote.last = last;
+            }
+            return quote;
+        },
+        .fee_rate = [](const Core::Order &order, bool is_maker) {
+            return Core::Engine::getInstance()
+                .get_fee_rate(order.exchange_name, order.market_type, is_maker)
+                .toDouble();
+        },
+        .report = [this](const Core::OrderResNormalized &res) {
+            update_order_state(res);
+        },
+        .log = [](const Core::Order *order, const std::string &message,
+                  const nlohmann::json &metadata, bool is_error) {
+            Core::Engine::getInstance().create_system_log(
+                order != nullptr ? order->symbol : "",
+                is_error ? Core::LOG_LEVEL_ERROR : Core::LOG_LEVEL_INFO, message,
+                is_error ? Core::TRADING_LOG_EVENT_TYPE_PAPER_EXCHANGE_ERROR
+                         : Core::TRADING_LOG_EVENT_TYPE_PAPER_FILL_EVALUATED,
+                metadata,
+                order != nullptr ? order->strategy_id : -1,
+                order != nullptr ? order->exchange_name : "",
+                order != nullptr ? order->market_type : "");
+        },
+        .slippage_bps = paper_slippage_bps(),
+    };
+}
+
+void Live::StateUpdater::poll_paper_exchange_liveness() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_paper_exchange_liveness_check < std::chrono::minutes(1)) return;
+    last_paper_exchange_liveness_check = now;
     {
-        std::shared_lock lock(this->paper_strategy_ids_mutex);
+        std::shared_lock lock(paper_strategy_ids_mutex);
         if (paper_strategy_ids.empty()) return;
     }
-    last_paper_fills_poll_time = std::chrono::steady_clock::now();
+    const long long age_ms =
+        DatetimeUtils::get_current_time_ms() - paper_exchange_->last_tick_ms();
+    if (age_ms <= kPaperExchangeStaleMs) return;
+    Core::Engine::getInstance().create_system_log(
+        "", Core::LOG_LEVEL_ERROR, "Paper exchange has not run a pass",
+        Core::TRADING_LOG_EVENT_TYPE_PAPER_EXCHANGE_ERROR,
+        nlohmann::json{{"age_ms", age_ms}}, -1);
+}
 
-    auto &engine = Core::Engine::getInstance();
-    const long long now_ms = DatetimeUtils::get_current_time_ms();
-    const bool feed_fresh = now_ms - engine.get_latest_market_event_time_ms() <=
-                            kPaperFeedMaxAgeMs;
+void Live::StateUpdater::apply_quote_holds(const QuoteHolds::Pulls &pulls,
+                                           bool guard_fresh) {
+    const bool shutting_down = this->quotes_shutdown_.load();
+    for (auto &strategy : Core::Engine::getInstance().get_strategies()) {
+        const int id = strategy->strategy_config.id;
+        const char *reason = QuoteHolds::pull_reason(
+            pulls, id, this->is_paper_strategy(id), guard_fresh, shutting_down);
+        strategy->set_quotes_pulled(
+            reason != nullptr,
+            reason != nullptr ? reason : Core::QuotesPullReason::PULL_SIGNAL);
+    }
+}
 
-    std::unordered_map<std::string, std::pair<double, double>> trade_range;
+void Live::StateUpdater::pull_quotes_for_shutdown(
+    std::chrono::milliseconds timeout) {
+    quotes_shutdown_.store(true);
     {
-        std::lock_guard lock(paper_trade_range_mutex);
-        trade_range.swap(paper_trade_range);
+        std::lock_guard<std::mutex> lock(quote_holds_mutex_);
+        apply_quote_holds(last_quote_pulls_, true);
     }
-
-    std::unordered_set<unsigned long long> open_ids;
-    for (const auto &order : engine.get_orders()) {
-        if (!is_paper_strategy(order.strategy_id)) continue;
-        open_ids.insert(order.id);
-        if (!order.is_order_creation_acknowledged ||
-            order.first_cancel_request_time_ms != 0) {
-            continue;
-        }
-
-        Live::PaperQuote quote;
-        const auto bba =
-            engine.get_bba(order.symbol, order.exchange_name, order.market_type);
-        if (bba.has_value() && now_ms - bba->timestamp_ms <= kPaperBbaMaxAgeMs &&
-            bba->best_bid_price > 0 && bba->best_ask_price > 0) {
-            quote.best_bid = bba->best_bid_price;
-            quote.best_ask = bba->best_ask_price;
-        }
-        if (feed_fresh) {
-            const auto last = engine.get_price(order.symbol, order.exchange_name,
-                                               order.market_type);
-            if (last.has_value() && last.value() > 0) quote.last = last;
-        }
-        const bool has_price = quote.best_ask.has_value() || quote.last.has_value();
-        if (!has_price) continue;
-
-        const bool is_first_check = paper_orders_checked.insert(order.id).second;
-        Core::OrderResNormalized res;
-        res.symbol = order.get_order_api_symbol();
-        res.client_order_id = order.client_order_id;
-        res.status = Core::ORDER_STATUS_NOT_WORKING;
-        res.orig_quantity = order.quantity;
-        res.timestamp = order.create_timestamp;
-        res.last_updated_timestamp = now_ms;
-        if (is_first_check && order.post_only) {
-            if (Live::PaperTrading::rejects_post_only(
-                    order.side, order.price.toDouble(), quote)) {
-                res.price = order.price;
-                res.filled_quantity = order.filled_quantity;
-                this->update_order_state(res);
-            }
-            continue;
-        }
-        if (!is_first_check) {
-            const auto range = trade_range.find(order.exchange_name + "|" +
-                                                order.market_type + "|" +
-                                                order.symbol);
-            if (range != trade_range.end()) {
-                quote.trade_low = range->second.first;
-                quote.trade_high = range->second.second;
-            }
-        }
-        const auto fill =
-            Live::PaperTrading::evaluate(order.side, order.price.toDouble(),
-                                         is_first_check, quote,
-                                         paper_slippage_bps());
-        if (!fill.has_value()) continue;
-
-        const mpfr::mpreal fee_rate = engine.get_fee_rate(
-            order.exchange_name, order.market_type, fill->is_maker);
-        res.price = fill->price;
-        res.filled_quantity = order.quantity;
-        res.last_trade_timestamp = now_ms;
-        res.fee = Core::OrderResFees{
-            .currency = "USDT", .amount = order.quantity * fill->price * fee_rate};
-        res.is_maker = fill->is_maker;
-        this->update_order_state(res);
+    auto &engine = Core::Engine::getInstance();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    int resting = engine.sweep_pulled_quotes();
+    while (resting > 0 && std::chrono::steady_clock::now() < deadline) {
+        poll_check_unacked_orders();
+        poll_check_failed_cancels();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        resting = engine.sweep_pulled_quotes();
     }
-    std::erase_if(paper_orders_checked,
-                  [&](unsigned long long id) { return !open_ids.contains(id); });
+    const nlohmann::json md = {{"resting", resting}};
+    if (resting > 0) {
+        engine.create_system_log(
+            "", Core::LOG_LEVEL_ERROR,
+            "Entry orders still resting at shutdown",
+            Core::TRADING_LOG_EVENT_TYPE_QUOTES_PULL_INCOMPLETE, md, -1);
+    }
+    LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
+             "Quotes pulled for shutdown", md);
+}
+
+void Live::StateUpdater::poll_quote_holds() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_quote_holds_poll_ < std::chrono::seconds(1)) return;
+    last_quote_holds_poll_ = now;
+    if (now - last_quote_holds_ok_.load() > std::chrono::seconds(15)) {
+        std::lock_guard<std::mutex> lock(quote_holds_mutex_);
+        apply_quote_holds(last_quote_pulls_, false);
+    }
+    if (quote_holds_in_flight_.exchange(true)) return;
+    std::thread([this]() {
+        struct ClearInFlight {
+            std::atomic<bool> &flag;
+            ~ClearInFlight() { flag.store(false); }
+        } clear{quote_holds_in_flight_};
+        try {
+            const auto snap = quote_holds_->fetch();
+            const bool guard_fresh =
+                !is_prod || (snap.guard_age_ms.has_value() &&
+                             *snap.guard_age_ms <= QuoteHolds::kGuardStaleMs);
+            std::lock_guard<std::mutex> lock(quote_holds_mutex_);
+            last_quote_pulls_ = QuoteHolds::pulls(snap.latest_per_key);
+            last_quote_holds_ok_.store(std::chrono::steady_clock::now());
+            quote_holds_failing_.store(false);
+            apply_quote_holds(last_quote_pulls_, guard_fresh);
+        } catch (const std::exception &e) {
+            if (!quote_holds_failing_.exchange(true)) {
+                const nlohmann::json md = {{"error", e.what()}};
+                LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_ENGINE_SIGNALS_FETCH_FAILED,
+                          "Quote holds read failed", md);
+            }
+            std::lock_guard<std::mutex> lock(quote_holds_mutex_);
+            apply_quote_holds(last_quote_pulls_, false);
+        }
+    }).detach();
 }
 
 void Live::StateUpdater::poll_discretionary_accounts(bool force) {
@@ -2568,39 +2689,103 @@ bool Live::StateUpdater::check_paper_mode_switches() {
     }
 
     const auto state = this->read_trading_state_from_disk();
-    std::vector<int> conflicts;
+    std::vector<std::pair<int, bool>> strategies;
     for (const auto &strategy : Core::Engine::getInstance().get_strategies()) {
         const int id = strategy->strategy_config.id;
-        const bool is_paper = is_paper_strategy(id);
-        const auto key = std::to_string(id);
-        if (modes.contains(key) && modes[key].get<bool>() != is_paper &&
-            state.has_value()) {
-            const bool has_state =
-                std::any_of(state->orders.begin(), state->orders.end(),
-                            [&](const auto &o) { return o.strategy_id == id; }) ||
-                std::any_of(state->trades.begin(), state->trades.end(),
-                            [&](const auto &t) { return t.strategy_id == id; });
-            if (has_state) conflicts.push_back(id);
-        }
-        modes[key] = is_paper;
+        strategies.emplace_back(id, is_paper_strategy(id));
     }
+    auto plan = Live::PaperTrading::plan_mode_switches(
+        modes, strategies,
+        state.has_value() ? state->orders : std::vector<Core::Order>{},
+        state.has_value() ? state->trades : std::vector<Core::Trade>{});
+    const std::vector<int> &conflicts = plan.refused;
+    paper_to_live_strategy_ids.insert(plan.paper_to_live.begin(), plan.paper_to_live.end());
+    modes = std::move(plan.modes);
 
     if (!conflicts.empty()) {
         const nlohmann::json metadata = {{"strategy_ids", conflicts}};
         LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
-                  "Strategy switched between paper and live with open orders "
-                  "or trades; switch it back or close it out first",
+                  "Strategy switched from live to paper with open orders or "
+                  "trades; switch it back or close it out first",
                   metadata);
         Core::Engine::getInstance().create_system_log(
             "", Core::LOG_LEVEL_ERROR,
-            "Strategy switched between paper and live with open orders or "
+            "Strategy switched from live to paper with open orders or "
             "trades; refusing to start",
             Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED, metadata,
             -1);
         return false;
     }
-    std::ofstream(path) << modes.dump(1);
+
+    // Paper trades of a strategy now live close on paper at the venue's
+    // current price; without a price for every one the switch is refused.
+    std::map<std::pair<std::string, std::string>,
+             std::unordered_map<std::string, double>>
+        prices;
+    std::vector<std::string> unpriced;
+    const long long now_ms = DatetimeUtils::get_current_time_ms();
+    for (const auto &trade : state.has_value() ? state->trades
+                                               : std::vector<Core::Trade>{}) {
+        if (!paper_to_live_strategy_ids.contains(trade.strategy_id)) continue;
+        const auto venue = std::make_pair(trade.exchange_name, trade.market_type);
+        if (!prices.contains(venue)) {
+            auto &by_symbol = prices[venue];
+            for (const auto &price : CcxtProxy::instance().fetch_prices(
+                     trade.exchange_name, trade.market_type)) {
+                by_symbol[price.symbol] = price.price;
+            }
+        }
+        const auto it = prices[venue].find(trade.symbol);
+        if (it == prices[venue].end() || it->second <= 0) {
+            unpriced.push_back(trade.symbol);
+            continue;
+        }
+        paper_switch_closed_trades.push_back(
+            Live::PaperTrading::close_at(trade, it->second, now_ms));
+    }
+    if (!unpriced.empty()) {
+        const nlohmann::json metadata = {
+            {"strategy_ids", paper_to_live_strategy_ids}, {"symbols", unpriced}};
+        LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
+                  "Strategy switched from paper to live but its open paper "
+                  "trades have no price to close at; refusing to start",
+                  metadata);
+        Core::Engine::getInstance().create_system_log(
+            "", Core::LOG_LEVEL_ERROR,
+            "Strategy switched from paper to live but its open paper trades "
+            "have no price to close at; refusing to start",
+            Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED, metadata,
+            -1);
+        return false;
+    }
+    pending_paper_modes = modes;
     return true;
+}
+
+void Live::StateUpdater::commit_paper_modes() {
+    if (!paper_to_live_strategy_ids.empty()) {
+        // Persist the restored state without the closed paper trades before
+        // the new modes; a crash in between repeats the switch, never
+        // restores paper positions onto a live strategy.
+        if (!this->sync_state_to_disk()) {
+            throw std::runtime_error(
+                "could not checkpoint state after closing paper trades of a "
+                "strategy switched to live");
+        }
+        const nlohmann::json metadata = {
+            {"strategy_ids", paper_to_live_strategy_ids},
+            {"closed_paper_trades", paper_switch_closed_trades.size()}};
+        LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_STARTUP_PHASE,
+                 "Strategy switched from paper to live; its open paper trades "
+                 "were closed on paper at the startup price",
+                 metadata);
+        Core::Engine::getInstance().create_system_log(
+            "", Core::LOG_LEVEL_INFO,
+            "Strategy switched from paper to live; open paper trades closed on "
+            "paper at the startup price",
+            Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_STARTUP_PHASE, metadata, -1);
+    }
+    std::ofstream(paper_strategy_modes_path()) << pending_paper_modes.dump(1);
 }
 
 void Live::StateUpdater::update_order_state(
@@ -2633,6 +2818,24 @@ void Live::StateUpdater::update_order_state(
             }
             this->handle_order_state_check(order, order_res);
             found = true;
+        }
+    }
+    if (!found) {
+        // A stream report for an order already filled or cancelled out of
+        // state: book any fill it adds, otherwise there is nothing to do.
+        for (auto &order : Core::Engine::getInstance().get_removed_orders()) {
+            if (order.get_order_api_symbol() != order_res.symbol ||
+                !Core::Utils::is_same_order_adaptive(
+                    order, order_res.client_order_id,
+                    order_res.exchange_order_id)) {
+                continue;
+            }
+            found = true;
+            if (order_res.filled_quantity > order.filled_quantity) {
+                auto fill_info = order.from_order_res_normalized(
+                    Core::Engine::getInstance(), order_res);
+                this->on_order_fill(fill_info);
+            }
         }
     }
     if (!found) {
@@ -2821,6 +3024,10 @@ void Live::StateUpdater::handle_user_data_stream_msg(const std::string &msg) {
     }
 
     const auto &event_type = json_data["event_type"].get<std::string>();
+    if (event_type == Live::Constants::STREAM_EVENT_TYPE_HEARTBEAT) {
+        this->user_data_heartbeat_seen.store(true);
+        return;
+    }
 
     try {
         Core::Engine::getInstance().create_system_log(
@@ -2828,6 +3035,14 @@ void Live::StateUpdater::handle_user_data_stream_msg(const std::string &msg) {
             Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_MSG, json_data, -1);
 
         if (event_type == Live::Constants::STREAM_EVENT_TYPE_ORDER_UPDATE) {
+            if (json_data.contains("account_id")) {
+                const auto &acc = json_data["account_id"];
+                const long long account_id =
+                    acc.is_string() ? std::stoll(acc.get<std::string>())
+                                    : acc.get<long long>();
+                std::lock_guard<std::mutex> lock(this->stream_delivery_mutex);
+                this->stream_event_pending_since_ms.erase(account_id);
+            }
             if (json_data.contains("orders")) {
                 const auto &orders = json_data["orders"];
                 for (const auto &order : orders) {
@@ -2879,8 +3094,11 @@ void Live::StateUpdater::subscribe_market_data_streams() {
         [this](const std::string &msg) {
             this->stream_info_log_callback(msg);
         },
-        [this](const std::string &msg) {
-            this->stream_error_log_callback(msg);
+        [](const std::string &msg) {
+            Core::Engine::getInstance().create_system_log(
+                "", Core::LOG_LEVEL_WARNING, msg,
+                Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_DISCONNECTED,
+                nlohmann::json::object(), -1);
         });
     user_data_stream->connect();
     private_streams.push_back(std::move(user_data_stream));
@@ -3061,12 +3279,16 @@ void Live::StateUpdater::update_misc_orders() {
 
     for (const auto &[key, orders] : nontracked_inventory_close_orders) {
         for (const auto &order : orders) {
-            const auto &order_res = CcxtProxy::instance().query_order(
+            const auto lookup = CcxtProxy::instance().lookup_order(
                 order.exchange_name, order.market_type, order.account_id,
                 order.symbol, order.client_order_id);
+            const auto &order_res = lookup.order;
 
             if (order_res.has_value()) {
-                if (order_res->status == "closed") {
+                if (order_res->status == "closed" ||
+                    order_res->status == "canceled" ||
+                    order_res->status == "expired" ||
+                    order_res->status == "rejected") {
                     Core::Engine::getInstance().remove_tracked_misc_order(
                         order);
                 } else if (order_res->status == "open") {
@@ -3075,7 +3297,10 @@ void Live::StateUpdater::update_misc_orders() {
                         CcxtProxy::instance().cancel_order(order);
                     }
                 }
-            } else {
+            } else if (lookup.status ==
+                           CcxtProxy::OrderLookup::Status::NOT_FOUND &&
+                       this->confirm_order_not_found(
+                           Core::Utils::get_order_key(order))) {
                 Core::Engine::getInstance().remove_tracked_misc_order(order);
             }
         }
@@ -3231,8 +3456,13 @@ void Live::StateUpdater::validate_paper_trades_against_db() {
     }
 }
 
-// Detects and pauses only: closing untracked inventory and repaying loans
-// send real requests, and stay off until real accounts trade again.
+// A side mismatched on five consecutive checks (~40 min) is venue inventory no
+// trade owns: an unbooked fill. Closing it is safe for one or two stray lots;
+// many at once means the engine lost a book, and only a human may act on that.
+constexpr long long AUTO_CLOSE_MAX_SYMBOLS_PER_ACCOUNT = 3;
+constexpr double AUTO_CLOSE_MAX_NAV_FRACTION = 0.02;
+constexpr double AUTO_CLOSE_MAX_NOTIONAL_PER_SYMBOL = 500;
+
 void Live::StateUpdater::validate_inventory_against_current_active_trades() {
     this->validate_paper_trades_against_db();
     if (this->accounts.empty()) return;
@@ -3244,8 +3474,9 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
     std::unordered_map<long long, long long> mismatched_by_account_id;
     std::unordered_map<long long, double> abs_mismatch_notional_by_account_id;
     std::unordered_set<std::string> processed_symbols;
-
-    std::set<std::pair<long long, std::string>> mismatched_account_symbols;
+    std::unordered_map<long long, std::vector<Core::NonTrackedInventoryToBeClosed>>
+        close_candidates_by_account_id;
+    const auto held_trades = Core::Engine::getInstance().get_held_trades();
 
     Core::Engine::getInstance().create_system_log(
         "", Core::LOG_LEVEL_INFO,
@@ -3277,6 +3508,11 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
 
         auto full_account_state =
             Core::Engine::getInstance().get_full_account_state(account_id);
+        for (const auto &trade : held_trades) {
+            if (trade.account_id == account_id) {
+                full_account_state.trades.push_back(trade);
+            }
+        }
         std::erase_if(full_account_state.trades, [&](const Core::Trade &t) {
             return this->is_paper_strategy(t.strategy_id);
         });
@@ -3404,8 +3640,25 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
                             abs_mismatch_notional_by_account_id[account_id] +=
                                 diff_abs;
 
-                            mismatched_account_symbols.insert(
-                                {account_id, symbol});
+                            // Only venue excess can be closed; a trade the
+                            // venue lacks is left to the log.
+                            const bool closable =
+                                chk.side.has_value() ? signed_delta > 0 : true;
+                            if (closable) {
+                                close_candidates_by_account_id[account_id]
+                                    .push_back(Core::NonTrackedInventoryToBeClosed{
+                                        .symbol = symbol,
+                                        .exchange_name = account.exchange_name,
+                                        .market_type = account.market_type,
+                                        .account_id = account_id,
+                                        .quantity =
+                                            chk.side.has_value()
+                                                ? mpfr::mpreal(
+                                                      std::abs(signed_delta))
+                                                : mpfr::mpreal(signed_delta),
+                                        .position_side = chk.side,
+                                    });
+                            }
                         }
                     } else {
                         this->inventory_mismatches_sqlite_cache->insert(
@@ -3419,18 +3672,6 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
         }
     }
 
-    std::unordered_set<int> strategies_to_pause;
-    for (const auto &trade : Core::Engine::getInstance().get_trades()) {
-        if (mismatched_account_symbols.contains(
-                {trade.account_id, trade.symbol})) {
-            strategies_to_pause.insert(trade.strategy_id);
-        }
-    }
-    for (const int strategy_id : strategies_to_pause) {
-        this->pause_strategy_for_mismatch(
-            strategy_id, {{"reason", "venue inventory mismatch"}});
-    }
-
     Core::Engine::getInstance().create_system_log(
         "", Core::LOG_LEVEL_INFO,
         "Ratio of inventory mismatches: " + std::to_string(total_mismatches) +
@@ -3439,6 +3680,33 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
         nlohmann::json::object(), -1);
 
     double nav = Core::Engine::getInstance().get_nav();
+    std::vector<Core::NonTrackedInventoryToBeClosed> to_close;
+    for (auto &[account_id, candidates] : close_candidates_by_account_id) {
+        const long long mismatched = mismatched_by_account_id[account_id];
+        const double notional = abs_mismatch_notional_by_account_id[account_id];
+        if (nav <= 0 || mismatched > AUTO_CLOSE_MAX_SYMBOLS_PER_ACCOUNT ||
+            notional > AUTO_CLOSE_MAX_NAV_FRACTION * nav) {
+            Core::Engine::getInstance().create_system_log(
+                "", Core::LOG_LEVEL_ERROR,
+                "Untracked inventory on account " + std::to_string(account_id) +
+                    " too large to close automatically",
+                Core::TRADING_LOG_EVENT_TYPE_HUMAN_INTERVENTION_REQUIRED,
+                nlohmann::json{{"account_id", account_id},
+                               {"mismatched_sides", mismatched},
+                               {"abs_mismatch_notional", notional},
+                               {"nav", nav}},
+                -1);
+            continue;
+        }
+        for (auto &candidate : candidates) {
+            to_close.push_back(std::move(candidate));
+        }
+    }
+    if (!to_close.empty()) {
+        std::thread([this, data = std::move(to_close)]() {
+            this->close_nontracked_inventory(data);
+        }).detach();
+    }
 
     if (nav == 0) {
         const auto start_time = std::chrono::steady_clock::now();
@@ -3514,8 +3782,54 @@ void Live::StateUpdater::validate_inventory_against_current_active_trades() {
     }
 }
 
+bool Live::StateUpdater::confirm_order_not_found(const std::string &order_key) {
+    constexpr long long ORDER_NOT_FOUND_CONFIRM_MS = 10000;
+    constexpr long long ORDER_NOT_FOUND_FORGET_MS = 6 * 60 * 60 * 1000;
+    const auto now = DatetimeUtils::get_current_time_ms();
+    std::lock_guard<std::mutex> lock(this->order_not_found_mutex);
+    std::erase_if(this->first_order_not_found_ms, [&](const auto &kv) {
+        return now - kv.second > ORDER_NOT_FOUND_FORGET_MS;
+    });
+    const auto it = this->first_order_not_found_ms.find(order_key);
+    if (it == this->first_order_not_found_ms.end()) {
+        this->first_order_not_found_ms[order_key] = now;
+        return false;
+    }
+    return now - it->second >= ORDER_NOT_FOUND_CONFIRM_MS;
+}
+
+void Live::StateUpdater::forget_order_not_found(const std::string &order_key) {
+    std::lock_guard<std::mutex> lock(this->order_not_found_mutex);
+    this->first_order_not_found_ms.erase(order_key);
+}
+
 void Live::StateUpdater::handle_invidual_order_not_found(Core::Order order) {
+    // Callers pass copies taken before the lookup; an ack that landed since
+    // must route the order to the acked path.
+    const auto order_key = Core::Utils::get_order_key(order);
+    bool still_live = false;
+    for (const auto &live : Core::Engine::getInstance().get_orders()) {
+        if (live.strategy_id == order.strategy_id && live.id == order.id) {
+            order = live;
+            still_live = true;
+            break;
+        }
+    }
+    if (!still_live) {
+        this->forget_order_not_found(order_key);
+        return;
+    }
+
     if (!order.is_order_creation_acknowledged) {
+        constexpr long long UNACKED_MIN_AGE_MS = 30000;
+        if (DatetimeUtils::get_current_time_ms() - order.create_timestamp <
+            UNACKED_MIN_AGE_MS) {
+            return;
+        }
+        if (!this->confirm_order_not_found(order_key)) {
+            return;
+        }
+        this->forget_order_not_found(order_key);
         Core::Engine::getInstance().create_system_log(
             order.symbol, Core::LOG_LEVEL_ERROR,
             "handle_invidual_order_not_found: unacked order not found, "
@@ -3527,7 +3841,6 @@ void Live::StateUpdater::handle_invidual_order_not_found(Core::Order order) {
         return;
     }
 
-    const auto order_key = Core::Utils::get_order_key(order);
     const auto unacked_orders_failed_to_retrieve_it =
         this->unacked_orders_failed_to_retrieve_cache->get(order_key);
 
@@ -3596,10 +3909,11 @@ void Live::StateUpdater::poll_check_unacked_orders() {
                 order.exchange_order_id.empty()) {
                 continue;
             }
-            const auto order_res = CcxtProxy::instance().query_order(order);
-            if (order_res.has_value()) {
-                this->update_order_state(order_res.value());
-            } else {
+            const auto lookup = CcxtProxy::instance().lookup_order(order);
+            if (lookup.order.has_value()) {
+                this->update_order_state(lookup.order.value());
+            } else if (lookup.status ==
+                       CcxtProxy::OrderLookup::Status::NOT_FOUND) {
                 this->handle_invidual_order_not_found(order);
             }
         }
@@ -3624,11 +3938,14 @@ void Live::StateUpdater::poll_check_failed_cancels() {
                 }
                 if (Core::Utils::is_same_order_by_client_and_account(
                         order, client_order_id, account_id)) {
-                    const auto order_res =
-                        CcxtProxy::instance().query_order(order);
-                    if (order_res.has_value()) {
-                        this->update_order_state(order_res.value());
-                    } else {
+                    const auto lookup =
+                        CcxtProxy::instance().lookup_order(order);
+                    if (lookup.order.has_value()) {
+                        this->update_order_state(lookup.order.value());
+                    } else if (lookup.status ==
+                                   CcxtProxy::OrderLookup::Status::NOT_FOUND &&
+                               this->confirm_order_not_found(
+                                   Core::Utils::get_order_key(order))) {
                         Core::Engine::getInstance().create_system_log(
                             order.symbol, Core::LOG_LEVEL_ERROR,
                             "Order not found after cancel failed, removing "
@@ -3664,10 +3981,13 @@ void Live::StateUpdater::poll_check_failed_cancels() {
                 order.exchange_order_id.empty()) {
                 continue;
             }
-            const auto order_res = CcxtProxy::instance().query_order(order);
-            if (order_res.has_value()) {
-                this->update_order_state(order_res.value());
-            } else {
+            const auto lookup = CcxtProxy::instance().lookup_order(order);
+            if (lookup.order.has_value()) {
+                this->update_order_state(lookup.order.value());
+            } else if (lookup.status ==
+                           CcxtProxy::OrderLookup::Status::NOT_FOUND &&
+                       this->confirm_order_not_found(
+                           Core::Utils::get_order_key(order))) {
                 Core::Engine::getInstance().create_system_log(
                     order.symbol, Core::LOG_LEVEL_ERROR,
                     "poll_check_failed_cancels: order not found, removing "
@@ -3784,14 +4104,9 @@ void Live::StateUpdater::live_event_consumer_loop() {
                     if (!event.trade.has_value()) break;
                     const auto &t = event.trade.value();
                     if (!(t.price > 0)) break;
-                    std::lock_guard lock(paper_trade_range_mutex);
-                    auto [it, inserted] = paper_trade_range.try_emplace(
+                    paper_exchange_->on_trade(
                         t.exchange_name + "|" + t.market_type + "|" + t.symbol,
-                        t.price, t.price);
-                    if (!inserted) {
-                        it->second.first = std::min(it->second.first, t.price);
-                        it->second.second = std::max(it->second.second, t.price);
-                    }
+                        t.price);
                     break;
                 }
                 case MarketData::MarketEvent::POLYMARKET_TICK_SIZE_CHANGE: {
@@ -3915,20 +4230,116 @@ void Live::StateUpdater::live_event_consumer_loop() {
 }
 
 void Live::StateUpdater::reconnect_streams() {
+    // Outages are mostly proxy restarts: retry every 5s, and raise one ERROR
+    // only when a stream stays down for two minutes.
+    static std::unordered_map<const WsStream *,
+                              std::chrono::steady_clock::time_point>
+        down_since, last_attempt;
+    static std::unordered_set<const WsStream *> outage_reported;
+    const auto now = std::chrono::steady_clock::now();
     for (auto &stream : private_streams) {
-        if (stream->is_disconnected()) {
-            LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_DISCONNECTED,
-                     "Reconnecting private stream: " + stream->wsurl_,
-                     nlohmann::json{});
-            this->system_info_log_callback(
-                "Reconnecting private stream: " + stream->wsurl_,
-                nlohmann::json::object());
-            stream->connect();
+        const WsStream *key = stream.get();
+        // The proxy heartbeats every 15s, so a silent socket is a dead one.
+        if (this->user_data_heartbeat_seen.load() &&
+            !stream->is_disconnected() &&
+            now - stream->get_last_msg_received() > std::chrono::seconds(45)) {
+            Core::Engine::getInstance().create_system_log(
+                "", Core::LOG_LEVEL_ERROR,
+                "Private stream silent for 45s, reconnecting: " +
+                    stream->wsurl_,
+                Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_STALE,
+                nlohmann::json::object(), -1);
+            stream->disconnect();
+            stream->is_disconnected_.store(true);
         }
+        if (!stream->is_disconnected()) {
+            if (down_since.erase(key) && outage_reported.erase(key)) {
+                this->system_info_log_callback(
+                    "Private stream recovered: " + stream->wsurl_,
+                    nlohmann::json::object());
+            }
+            continue;
+        }
+        down_since.emplace(key, now);
+        if (now - down_since[key] > std::chrono::minutes(2) &&
+            outage_reported.insert(key).second) {
+            Core::Engine::getInstance().create_system_log(
+                "", Core::LOG_LEVEL_ERROR,
+                "Private stream down for over two minutes: " + stream->wsurl_,
+                Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_DISCONNECTED,
+                nlohmann::json::object(), -1);
+        }
+        if (last_attempt.count(key) &&
+            now - last_attempt[key] < std::chrono::seconds(5)) {
+            continue;
+        }
+        last_attempt[key] = now;
+        LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_DISCONNECTED,
+                 "Reconnecting private stream: " + stream->wsurl_,
+                 nlohmann::json{});
+        stream->connect();
     }
 
     Live::AccountStreamManager::getInstance().reconnect_disconnected();
     Live::AccountStreamManager::getInstance().check_staleness();
+    this->check_private_stream_delivery();
+}
+
+void Live::StateUpdater::note_order_accepted_by_venue(long long account_id) {
+    std::lock_guard<std::mutex> lock(this->stream_delivery_mutex);
+    this->stream_event_pending_since_ms.try_emplace(
+        account_id, DatetimeUtils::get_current_time_ms());
+}
+
+void Live::StateUpdater::check_private_stream_delivery() {
+    constexpr long long NO_EVENT_AFTER_ACCEPT_MS = 90000;
+    constexpr long long RESTART_COOLDOWN_MS = 5 * 60000;
+    if (!this->user_data_heartbeat_seen.load() || private_streams.empty()) {
+        return;
+    }
+    const auto now = DatetimeUtils::get_current_time_ms();
+    std::vector<long long> stalled;
+    {
+        std::lock_guard<std::mutex> lock(this->stream_delivery_mutex);
+        for (auto &[account_id, since] : this->stream_event_pending_since_ms) {
+            if (now - since < NO_EVENT_AFTER_ACCEPT_MS) continue;
+            auto &last = this->stream_restart_requested_ms[account_id];
+            if (now - last < RESTART_COOLDOWN_MS) continue;
+            last = now;
+            since = now;
+            stalled.push_back(account_id);
+        }
+    }
+    std::string base = private_streams.front()->wsurl_;
+    if (base.rfind("ws://", 0) == 0) base = "http://" + base.substr(5);
+    if (base.rfind("wss://", 0) == 0) base = "https://" + base.substr(6);
+    const auto stream_suffix = base.rfind("/stream");
+    if (stream_suffix == std::string::npos) return;
+    base = base.substr(0, stream_suffix);
+    for (const long long account_id : stalled) {
+        const auto it = this->accounts.find(account_id);
+        if (it == this->accounts.end()) continue;
+        Core::Engine::getInstance().create_system_log(
+            "", Core::LOG_LEVEL_ERROR,
+            "No stream event 90s after a venue-accepted order, restarting "
+            "the account's private stream: " +
+                std::to_string(account_id),
+            Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_STALE,
+            nlohmann::json{{"account_id", account_id},
+                           {"exchange_name", it->second.exchange_name},
+                           {"market_type", it->second.market_type}},
+            -1);
+        HttpRequest req;
+        req.url = base + "/restart-streams?exchange_name=" +
+                  it->second.exchange_name +
+                  "&market_type=" + it->second.market_type +
+                  "&account_id=" + std::to_string(account_id);
+        req.method = "POST";
+        req.timeout_ms = 30000;
+        std::thread([req = std::move(req)]() mutable {
+            CurlMultiManager::instance().execute(std::move(req));
+        }).detach();
+    }
 }
 
 void Live::StateUpdater::run_extensive_exchange_health_checks() {
@@ -4107,8 +4518,15 @@ void Live::StateUpdater::init_stall_orders_sqlite_cache() {
 
 void Live::StateUpdater::create_account_db_records() {
     auto &config = Live::Config::getInstance();
+    std::set<long long> existing;
+    for (const auto &row : PQUtils::fetch_from_postgres(
+             config.get_db_connection_string(),
+             "SELECT account_id FROM account")) {
+        existing.insert(std::stoll(row["account_id"].get<std::string>()));
+    }
 
     for (const auto &[account_id, account] : this->accounts) {
+        if (existing.contains(account_id)) continue;
         nlohmann::json db_record = nlohmann::json::object();
         db_record["account_id"] = account_id;
         db_record["exchange_name"] = account.exchange_name;
@@ -4159,6 +4577,15 @@ void Live::StateUpdater::write_paper_account_records(
                   {"market_type", exchange.market_type},
                   {"account_type", "paper"}}});
         }
+    }
+    const auto rows = PQUtils::fetch_from_postgres(
+        config.get_db_connection_string(),
+        "SELECT account_id FROM account WHERE account_type = 'paper' AND "
+        "account_id IS NOT NULL");
+    std::unique_lock lock(this->paper_trade_account_ids_mutex);
+    for (const auto &row : rows) {
+        this->paper_trade_account_ids.insert(
+            std::stoll(row["account_id"].get<std::string>()));
     }
 }
 
@@ -4787,6 +5214,7 @@ void Live::StateUpdater::RunTradeLoop() {
         LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_STARTUP_PHASE,
                  "Recovering state from disk", nlohmann::json{});
         recover_state_from_disk();
+        commit_paper_modes();
         this->poll_discretionary_accounts(true);
         LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_STARTUP_PHASE,
                  "Setting state to ready", nlohmann::json{});
@@ -4801,6 +5229,9 @@ void Live::StateUpdater::RunTradeLoop() {
 
         std::thread([&]() { update_misc_orders(); }).detach();
 
+        paper_exchange_->start();
+
+        main_loop_running.store(true);
         while (std::chrono::steady_clock::now() - program_start_time <
                std::chrono::minutes(
                    Live::Constants::PROGRAM_MAX_RUNTIME_MINUTES)) {
@@ -4811,9 +5242,10 @@ void Live::StateUpdater::RunTradeLoop() {
                     .count(),
                 std::memory_order_relaxed);
             poll_order_state_watchdog();
-            poll_paper_fills();
             poll_discretionary_accounts();
             poll_paper_nav();
+            poll_paper_exchange_liveness();
+            poll_quote_holds();
             poll_strategy_rows();
             flush_strategy_command_reports();
             poll_fetch_prices();
@@ -4838,6 +5270,12 @@ void Live::StateUpdater::RunTradeLoop() {
             run_polymarket_tasks();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
+            if (termination_requested.load()) {
+                LOG_INFO(
+                    Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
+                    "SIGTERM received, shutting down", nlohmann::json{});
+                break;
+            }
             if (is_shutdown_file_found()) {
                 LOG_INFO(
                     Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
@@ -4860,6 +5298,8 @@ void Live::StateUpdater::RunTradeLoop() {
         }
         LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
                  "Exited trade loop", nlohmann::json{});
+        pull_quotes_for_shutdown(std::chrono::seconds(20));
+        paper_exchange_->stop();
         Core::Engine::getInstance().stop_trading();
         LOG_INFO(Core::TRADING_LOG_EVENT_TYPE_LIVE_INFRA_SHUTDOWN_REQUESTED,
                  "Stopped trading", nlohmann::json{});

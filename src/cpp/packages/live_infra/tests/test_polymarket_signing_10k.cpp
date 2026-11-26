@@ -143,7 +143,7 @@ static nlohmann::json load_test_vectors() {
     }
 
     FAIL("Could not find signing_test_vectors_10k.json — run "
-         "generate_signing_test_vectors.py first");
+         "generate the signing test vectors file first");
     return {};
 }
 
@@ -466,7 +466,7 @@ TEST_CASE("10k JSON body byte-for-byte comparison", "[polymarket][10k]") {
     // Skip if vectors don't have json_body (old format)
     if (!vectors.empty() && !vectors[0].contains("json_body")) {
         WARN("Test vectors missing json_body field — regenerate with "
-             "generate_signing_test_vectors.py");
+             "the signing test vectors generator");
         SKIP();
     }
 

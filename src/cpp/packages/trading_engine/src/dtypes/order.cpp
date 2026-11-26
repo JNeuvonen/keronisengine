@@ -460,9 +460,24 @@ Core::OrderFillInfo Core::Order::from_order_res_normalized(
     mpfr::mpreal fill_delta = filled_qty - this->filled_quantity;
     fill_info.sizing_coeff_delta =
         (fill_delta / this->quantity) * this->sizing_coeff_delta;
+    // order_res.price is the average over the whole order; this fill is only the delta.
+    mpfr::mpreal fill_price = order_res.price;
+    if (order_res.has_fill_price && fill_delta > 0) {
+        mpfr::mpreal booked_notional = 0;
+        mpfr::mpreal booked_qty = 0;
+        for (const auto &f : this->fills) {
+            booked_notional += f.price * (f.fill_amount - booked_qty);
+            booked_qty = f.fill_amount;
+        }
+        const mpfr::mpreal marginal =
+            (order_res.price * filled_qty - booked_notional) / fill_delta;
+        if (booked_qty == this->filled_quantity && marginal > 0) {
+            fill_price = marginal;
+        }
+    }
     fill_info.price =
         engine.round_price(this->get_order_api_symbol(), this->exchange_name,
-                           this->market_type, order_res.price);
+                           this->market_type, fill_price);
     fill_info.fill_amount = filled_qty;
     fill_info.trade_id = this->trade_id;
     fill_info.orig_order_full_size = this->quantity;
@@ -488,7 +503,9 @@ Core::OrderFillInfo Core::Order::from_order_res_normalized(
         }
     }
 
-    fill_info.is_maker = order_res.is_maker;
+    // An order that cannot rest only ever takes; venue responses carry no maker flag.
+    fill_info.is_maker = order_res.is_maker && this->type != OrderType::IMMEDIATE_OR_CANCEL &&
+                         this->type != OrderType::FILL_OR_KILL && this->type != OrderType::MARKET;
     fill_info.is_order_cancelled_before_fill = (this->cancel_timestamp > 0);
     fill_info.order_cancel_timestamp = this->cancel_timestamp;
     fill_info.markout_config = this->markout_config;

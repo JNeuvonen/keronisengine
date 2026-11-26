@@ -88,7 +88,8 @@ enum OrderConstructionResult {
     ORDER_NOT_ALLOWED_TO_PASS_RISK_ENGINE,
     MIN_NOTIONAL_FILTER_FAILED,
     ENGINE_CONSTRUCT_ORDER_FAILED,
-    STRATEGY_STOP_MAKING_MARKETS
+    STRATEGY_STOP_MAKING_MARKETS,
+    STRATEGY_QUOTES_PULLED
 };
 
 inline const char *order_construction_result_to_str(OrderConstructionResult r) {
@@ -135,6 +136,7 @@ inline const char *order_construction_result_to_str(OrderConstructionResult r) {
         case ENGINE_CONSTRUCT_ORDER_FAILED:
             return "ENGINE_CONSTRUCT_ORDER_FAILED";
         case STRATEGY_STOP_MAKING_MARKETS: return "STRATEGY_STOP_MAKING_MARKETS";
+        case STRATEGY_QUOTES_PULLED: return "STRATEGY_QUOTES_PULLED";
     }
     return "UNKNOWN";
 }
@@ -234,6 +236,7 @@ enum class Exchange {
     ASTER,
     POLYGON,
     IBKR,
+    LIGHTER,
     UNKNOWN,
 };
 
@@ -253,6 +256,7 @@ inline Exchange exchange_from_str(const std::string& s) {
     if (s == "aster") return Exchange::ASTER;
     if (s == "polygon") return Exchange::POLYGON;
     if (s == "ibkr") return Exchange::IBKR;
+    if (s == "lighter") return Exchange::LIGHTER;
     return Exchange::UNKNOWN;
 }
 
@@ -266,6 +270,7 @@ inline const std::string& exchange_to_str(Exchange e) {
     static const std::string aster = "aster";
     static const std::string polygon = "polygon";
     static const std::string ibkr = "ibkr";
+    static const std::string lighter = "lighter";
     static const std::string unknown = "";
     switch (e) {
         case Exchange::BINANCE: return binance;
@@ -277,6 +282,7 @@ inline const std::string& exchange_to_str(Exchange e) {
         case Exchange::ASTER: return aster;
         case Exchange::POLYGON: return polygon;
         case Exchange::IBKR: return ibkr;
+        case Exchange::LIGHTER: return lighter;
         default: return unknown;
     }
 }

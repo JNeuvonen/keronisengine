@@ -20,7 +20,7 @@
 // of thing," the metadata is "whose."
 //
 // Adding a new event type: also add a row to
-// agentic_system/subsystems/cpp/common/LOG_EVENT_SCHEMA.md documenting the
+// Keep event type names stable; downstream consumers query by these constants.
 // required metadata keys and emit level.
 // =============================================================================
 
@@ -93,6 +93,10 @@ constexpr const char* TRADING_LOG_EVENT_TYPE_LATE_FILL_ON_CANCELLED =
     "LATE_FILL_ON_CANCELLED";
 constexpr const char* TRADING_LOG_EVENT_TYPE_FILL_WITHOUT_MATCHING_ORDER =
     "FILL_WITHOUT_MATCHING_ORDER";
+constexpr const char* TRADING_LOG_EVENT_TYPE_PAPER_FILL_EVALUATED =
+    "PAPER_FILL_EVALUATED";
+constexpr const char* TRADING_LOG_EVENT_TYPE_PAPER_EXCHANGE_ERROR =
+    "PAPER_EXCHANGE_ERROR";
 
 // -----------------------------------------------------------------------------
 // Trade lifecycle
@@ -117,6 +121,10 @@ constexpr const char* TRADING_LOG_EVENT_TYPE_STRATEGY_PAUSED =
     "STRATEGY_PAUSED";
 constexpr const char* TRADING_LOG_EVENT_TYPE_STRATEGY_RESUMED =
     "STRATEGY_RESUMED";
+constexpr const char* TRADING_LOG_EVENT_TYPE_QUOTES_PULLED = "QUOTES_PULLED";
+constexpr const char* TRADING_LOG_EVENT_TYPE_QUOTES_RESUMED = "QUOTES_RESUMED";
+constexpr const char* TRADING_LOG_EVENT_TYPE_QUOTES_PULL_INCOMPLETE =
+    "QUOTES_PULL_INCOMPLETE";
 constexpr const char* TRADING_LOG_EVENT_TYPE_STRATEGY_HEARTBEAT =
     "STRATEGY_HEARTBEAT";
 constexpr const char* TRADING_LOG_EVENT_TYPE_STRATEGY_REGIME_HEARTBEAT =
@@ -127,6 +135,12 @@ constexpr const char* TRADING_LOG_EVENT_TYPE_MODEL_BUNDLE_SEED =
     "MODEL_BUNDLE_SEED";
 constexpr const char* TRADING_LOG_EVENT_TYPE_MODEL_BUNDLE_UPDATE =
     "MODEL_BUNDLE_UPDATE";
+constexpr const char* TRADING_LOG_EVENT_TYPE_STRATEGY_CONFIG_INVALID =
+    "STRATEGY_CONFIG_INVALID";
+constexpr const char* TRADING_LOG_EVENT_TYPE_TRADE_CLOSE_STUCK =
+    "TRADE_CLOSE_STUCK";
+constexpr const char* TRADING_LOG_EVENT_TYPE_TRADE_LOT_STOP =
+    "TRADE_LOT_STOP";
 
 // -----------------------------------------------------------------------------
 // Private (account) streams — user-data WS, order/fill pushes, balance deltas
@@ -248,6 +262,8 @@ constexpr const char* TRADING_LOG_EVENT_TYPE_SM_WARMUP_TIMEOUT =
 constexpr const char* TRADING_LOG_EVENT_TYPE_SM_WENT_LIVE = "SM_WENT_LIVE";
 constexpr const char* TRADING_LOG_EVENT_TYPE_SM_SYNCER_PROGRESS =
     "SM_SYNCER_PROGRESS";
+constexpr const char* TRADING_LOG_EVENT_TYPE_SM_FEED_REPAIR =
+    "SM_FEED_REPAIR";
 constexpr const char* TRADING_LOG_EVENT_TYPE_SM_SYNCER_SKIPPED_NON_TRADE =
     "SM_SYNCER_SKIPPED_NON_TRADE";
 constexpr const char* TRADING_LOG_EVENT_TYPE_SM_SYNCER_STALE_TRADE_ID =
@@ -446,7 +462,7 @@ constexpr const char* TRADING_LOG_EVENT_TYPE_ORDERBOOK_SUBSCRIPTION_CHANGED =
     "ORDERBOOK_SUBSCRIPTION_CHANGED";
 
 // =============================================================================
-// Log levels — actionable semantics. See agentic_system/skills/LOGGING.md.
+// Log levels — actionable semantics.
 //
 //   ERROR    — actionable. Operator or agent must do something. Never used for
 //              expected cache misses, fallbacks, or "not found" when not-found

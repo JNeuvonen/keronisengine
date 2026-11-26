@@ -865,7 +865,7 @@ std::vector<Core::PolymarketBulkCancelResult> PolymarketClient::cancel_orders(
     std::string serialized = body.dump();
 
     // Cancel uses L2-only headers (no builder headers), matching the
-    // official Python SDK (py_clob_client) and polymarket_wrapper.py.
+    // official Python SDK (py_clob_client).
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::to_string(
         std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch())

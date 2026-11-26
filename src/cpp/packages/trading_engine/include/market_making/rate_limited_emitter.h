@@ -12,7 +12,7 @@
 namespace Core {
 
 // Per-key cooldown emitter for high-frequency log events. See
-// agentic_system/skills/LOGGING.md hard-constraint 7 — events that can fire
+// Rate-limits high-frequency log events that can fire
 // hundreds of times per second (min-notional rejections, orderbook sync
 // warnings, late fills, etc.) must be rate-limited at the emit site so the
 // DB log table and operator dashboard stay signal-rich.
@@ -40,7 +40,7 @@ namespace Core {
 // upgrade to an exclusive lock happens inside. Copy-under-lock, release,
 // invoke — never invoke the emitter callback with the lock held, since the
 // callback enqueues to the trading_logs queue which itself is lock-free but
-// can grow. See OUR_SOFTWARE_ENGINEERING_PATTERNS.md § 4.
+// can grow.
 class RateLimitedEmitter {
    public:
     RateLimitedEmitter() = default;

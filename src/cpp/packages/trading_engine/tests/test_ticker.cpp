@@ -17,7 +17,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 
+#include "market_making/dtypes/constants.h"
 #include "market_making/dtypes/order.h"
+#include "market_making/dtypes/order_res.h"
 #include "market_making/dtypes/prediction.h"
 #include "market_making/ticker.h"
 #include "test_helpers.h"
@@ -1261,5 +1263,154 @@ TEST_CASE(
         REQUIRE(ticker->purge_stale_removed_orders(kAckTime + kGraceMs,
                                                    kGraceMs) == 1);
         REQUIRE(ticker->orders_removed_from_state.empty());
+    }
+}
+
+TEST_CASE("TradeTicker::on_cancel_rm_from_state keeps every removed order",
+          "[ticker][order-lifecycle]") {
+    TestHelpers::ensure_minimal_engine();
+    auto& engine = Core::Engine::getInstance();
+    for (bool creation_failed : {false, true}) {
+        auto ticker = TestHelpers::make_test_ticker();
+        auto order = make_simple_order();
+        ticker->orders.push_back(order);
+        ticker->order_count.store(1);
+
+        ticker->on_cancel_rm_from_state(engine, order, creation_failed);
+
+        REQUIRE(ticker->orders.empty());
+        REQUIRE(ticker->orders_removed_from_state.size() == 1);
+        REQUIRE(ticker->orders_removed_from_state.front().id == order.id);
+        REQUIRE(ticker->orders_removed_from_state.front().ack_state_removal ==
+                engine.get_time());
+    }
+}
+
+TEST_CASE("TradeTicker books a fill that arrives after a cancel",
+          "[ticker][order-lifecycle]") {
+    TestHelpers::ensure_minimal_engine();
+    auto& engine = Core::Engine::getInstance();
+    auto ticker = TestHelpers::make_test_ticker();
+    auto order = make_simple_order();
+    order.sizing_coeff_delta = mpfr::mpreal("1");
+    ticker->orders.push_back(order);
+    ticker->order_count.store(1);
+
+    ticker->on_cancel_rm_from_state(engine, order, false);
+    REQUIRE(ticker->orders_removed_from_state.size() == 1);
+
+    Core::OrderResNormalized res;
+    res.symbol = "BTCUSDT";
+    res.client_order_id = order.client_order_id;
+    res.status = Core::ORDER_STATUS_NOT_WORKING;
+    res.price = mpfr::mpreal("50010");
+    res.orig_quantity = order.quantity;
+    res.filled_quantity = order.quantity;
+    res.timestamp = 1700000000000;
+    res.last_updated_timestamp = 1700000000500;
+    res.last_trade_timestamp = 1700000000500;
+    auto fill = order.from_order_res_normalized(engine, res);
+
+    ticker->on_order_filled_ack(engine, fill);
+
+    REQUIRE(ticker->active_trades.size() == 1);
+    REQUIRE(ticker->orders_removed_from_state.size() == 1);
+
+    // The same fill again (stream after poll) books nothing more.
+    ticker->on_order_filled_ack(engine, fill);
+    REQUIRE(ticker->active_trades.size() == 1);
+}
+
+TEST_CASE("TradeTicker keeps a filled order so a repeated fill books nothing",
+          "[ticker][order-lifecycle]") {
+    TestHelpers::ensure_minimal_engine();
+    auto& engine = Core::Engine::getInstance();
+    auto ticker = TestHelpers::make_test_ticker();
+    auto order = make_simple_order();
+    order.sizing_coeff_delta = mpfr::mpreal("1");
+    ticker->orders.push_back(order);
+    ticker->order_count.store(1);
+
+    Core::OrderResNormalized res;
+    res.symbol = "BTCUSDT";
+    res.client_order_id = order.client_order_id;
+    res.status = Core::ORDER_STATUS_NOT_WORKING;
+    res.price = mpfr::mpreal("50010");
+    res.orig_quantity = order.quantity;
+    res.filled_quantity = order.quantity;
+    res.timestamp = 1700000000000;
+    res.last_updated_timestamp = 1700000000500;
+    res.last_trade_timestamp = 1700000000500;
+    auto fill = order.from_order_res_normalized(engine, res);
+
+    ticker->on_order_filled_ack(engine, fill);
+    REQUIRE(ticker->orders.empty());
+    REQUIRE(ticker->orders_removed_from_state.size() == 1);
+    REQUIRE(ticker->active_trades.size() == 1);
+    const auto booked = ticker->active_trades[0].open_quantity;
+
+    ticker->on_order_filled_ack(engine, fill);
+    REQUIRE(ticker->active_trades.size() == 1);
+    REQUIRE(ticker->active_trades[0].open_quantity == booked);
+}
+
+TEST_CASE(
+    "TradeTicker books every execution of one order into one trade when "
+    "the order carries its own signal_id",
+    "[ticker][fill][signal_id]") {
+    TestHelpers::ensure_minimal_engine();
+    auto& engine = Core::Engine::getInstance();
+    const auto order_with_signal = [](unsigned long long signal_id) {
+        auto order = Core::Order::create(
+            "BTCUSDT", Core::OrderType::IMMEDIATE_OR_CANCEL, Core::OrderSide::SELL,
+            mpfr::mpreal("50000"), make_test_signal(signal_id, mpfr::mpreal("1")),
+            mpfr::mpreal("0.1"), "binance", "swap", 1, 0, mpfr::mpreal("1"),
+            std::nullopt, false, 1700000000000, "USDT", "BTC", false, false,
+            Core::OrderTypeInternal::DEFAULT, false, std::nullopt, std::nullopt,
+            std::nullopt, false, false, "USDT", {}, std::nullopt, 1, std::nullopt);
+        order.sizing_coeff_delta = mpfr::mpreal("1");
+        return order;
+    };
+    const auto fill_through = [&](Core::Order order, const char* filled,
+                                  const char* status, long long ts) {
+        Core::OrderResNormalized res;
+        res.symbol = "BTCUSDT";
+        res.client_order_id = order.client_order_id;
+        res.status = status;
+        res.price = mpfr::mpreal("50000");
+        res.orig_quantity = order.quantity;
+        res.filled_quantity = mpfr::mpreal(filled);
+        res.timestamp = 1700000000000;
+        res.last_updated_timestamp = ts;
+        res.last_trade_timestamp = ts;
+        return order.from_order_res_normalized(engine, res);
+    };
+
+    for (bool per_fill : {false, true}) {
+        auto ticker = TestHelpers::make_test_ticker();
+        ticker->is_individual_fill_individual_trade.store(per_fill);
+        auto a = order_with_signal(1001);
+        auto b = order_with_signal(1002);
+        ticker->orders.push_back(a);
+        ticker->orders.push_back(b);
+        ticker->order_count.store(2);
+
+        // Order a executes against two resting orders: 0.09 then 0.01 more.
+        auto first = fill_through(a, "0.09", Core::ORDER_STATUS_WORKING, 1700000000100);
+        ticker->on_order_filled_ack(engine, first);
+        auto second = fill_through(a, "0.1", Core::ORDER_STATUS_NOT_WORKING, 1700000000100);
+        ticker->on_order_filled_ack(engine, second);
+        auto other = fill_through(b, "0.1", Core::ORDER_STATUS_NOT_WORKING, 1700000000200);
+        ticker->on_order_filled_ack(engine, other);
+
+        if (per_fill) {
+            REQUIRE(ticker->active_trades.size() == 3);
+            continue;
+        }
+        REQUIRE(ticker->active_trades.size() == 2);
+        REQUIRE(ticker->active_trades[0].signal_id == 1001);
+        REQUIRE(ticker->active_trades[0].open_quantity == mpfr::mpreal("0.1"));
+        REQUIRE(ticker->active_trades[1].signal_id == 1002);
+        REQUIRE(ticker->active_trades[1].open_quantity == mpfr::mpreal("0.1"));
     }
 }

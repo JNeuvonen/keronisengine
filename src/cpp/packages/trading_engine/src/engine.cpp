@@ -264,7 +264,7 @@ void Core::Engine::reset() {
     //     reset would walk each ticker's orders/trades; out of scope
     //     for this Phase — tests that care either use per-test
     //     Scenario (fresh engine) or inject orders via the control
-    //     plane after reset. Documented in LIVE_INFRA.md.
+    //     plane after reset.
     //   - Loaded ONNX models, exchange_symbol_infos, fees, calibration
     //     maps — all init-derived config.
     //   - Risk engine, inventories, quote_assets — account state.
@@ -540,6 +540,22 @@ void Core::Engine::update_inventory_and_quote_assets(
     // first row touched per key so a side that's gone to zero in this
     // poll (e.g. all shorts closed) doesn't leak a stale value from the
     // previous poll.
+    // Every caller passes the account's full snapshot, and venues omit flat
+    // symbols, so a symbol missing from it holds nothing.
+    const std::string account_suffix = ":" + exchange_name + ":" +
+                                       market_type + ":" +
+                                       std::to_string(account_id);
+    for (auto& [key, slot] : this->inventories) {
+        if (key.size() > account_suffix.size() &&
+            key.compare(key.size() - account_suffix.size(),
+                        account_suffix.size(), account_suffix) == 0) {
+            slot.long_total = mpfr::mpreal(0);
+            slot.short_total = mpfr::mpreal(0);
+            slot.total = mpfr::mpreal(0);
+            slot.used_margin = std::nullopt;
+            slot.maint_margin = std::nullopt;
+        }
+    }
     std::unordered_set<std::string> touched_keys;
     for (const auto& inventory : inventories) {
         const auto key = Utils::get_symbol_exchange_market_account_key(
@@ -888,6 +904,12 @@ void Core::Engine::run_periodic_calls() {
     this->recalculate_ticker_order_book_state();
     this->process_engine_signals();
     this->poll_realtime_subscriptions();
+    if (!this->is_backtest &&
+        now - this->last_sweep_pulled_quotes_time.load() >=
+            std::chrono::milliseconds(500)) {
+        this->last_sweep_pulled_quotes_time.store(now);
+        this->sweep_pulled_quotes();
+    }
     if (!this->is_backtest) {
         this->process_markouts();
         this->drain_strategy_telemetry();
@@ -1682,6 +1704,18 @@ std::vector<Core::Order> Core::Engine::get_orders() {
     return ret;
 }
 
+std::vector<Core::Order> Core::Engine::get_removed_orders() {
+    std::vector<Core::Order> ret;
+    for (const auto& strategy : this->strategies_view()) {
+        auto tickers_lock = strategy->lock_on_pred_market_strat();
+        for (const auto& ticker : strategy->trade_tickers) {
+            const auto orders = ticker.second->get_removed_orders();
+            ret.insert(ret.end(), orders.begin(), orders.end());
+        }
+    }
+    return ret;
+}
+
 Core::EngineStateSnapshot Core::Engine::build_realtime_snapshot() {
     if (!this->is_state_ready.load()) {
         return Core::EngineStateSnapshot{};
@@ -1938,6 +1972,39 @@ bool Core::Engine::manually_remove_trade(
                             TRADING_LOG_EVENT_TYPE_TRADE_MANUALLY_REMOVED,
                             metadata, removal.strategy_id, "", "");
     return false;
+}
+
+int Core::Engine::sweep_pulled_quotes() {
+    int resting = 0;
+    for (auto& strategy : this->strategies_view()) {
+        if (!strategy->quotes_pulled.load()) continue;
+        std::vector<StrategyDecision> decisions;
+        {
+            std::shared_lock<std::shared_mutex> tickers_lock(
+                strategy->trade_tickers_mutex);
+            for (auto& [symbol, ticker] : strategy->trade_tickers) {
+                StrategyDecision decision;
+                decision.symbol = symbol;
+                std::lock_guard<std::mutex> lock(ticker->trading_mutex);
+                for (auto& order : ticker->get_active_orders_mut_ref()) {
+                    if (!Strategy::is_quote(order.type,
+                                            order.is_trade_close_order)) {
+                        continue;
+                    }
+                    ++resting;
+                    if (!ticker->is_cancel_already_sent(order)) {
+                        ticker->mark_order_to_be_cancelled(*this, order,
+                                                           decision);
+                    }
+                }
+                if (!decision.cancelled_orders.empty()) {
+                    decisions.push_back(std::move(decision));
+                }
+            }
+        }
+        strategy->process_strategy_decisions(*this, decisions);
+    }
+    return resting;
 }
 
 void Core::Engine::register_engine_signal_handler(
@@ -3549,7 +3616,7 @@ void Core::Engine::process_markouts() {
 
 // ---------------------------------------------------------------------------
 // Observability layer — see ObservabilityBatch in engine.h and
-// agentic_system/skills/ENGINE_DIAGNOSTICS.md for the four-layer diagnostic
+// Diagnostic snapshot helpers for engine observability.
 // stack. Emit tick runs on the periodic_calls thread every ~10s; strategy +
 // SM health are included every 3rd tick (~30s cadence).
 // ---------------------------------------------------------------------------

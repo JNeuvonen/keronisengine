@@ -14,8 +14,7 @@ namespace {
 // a second test strategy — keep test_quoter trivial.
 constexpr double TEST_QUOTER_ORDER_QTY = 0.001;
 constexpr double TEST_QUOTER_PRICE_OFFSET_TICKS = 1.0;
-// Default tick size when exchange_info isn't yet loaded — matches the
-// fixture shape in cpp_live_proxy/backends/_fixtures.py for BTC/USDT:USDT.
+// Default tick size when exchange_info isn't yet loaded (BTC/USDT:USDT).
 constexpr double TEST_QUOTER_FALLBACK_TICK = 0.1;
 // 24h order expiry — well past any test scenario's horizon.
 constexpr long long TEST_QUOTER_ORDER_EXPIRY_MS = 24LL * 60 * 60 * 1000;

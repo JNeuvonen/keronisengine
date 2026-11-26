@@ -183,6 +183,13 @@ void AccountStreamManager::reconnect_disconnected() {
                 -1);
         }
 
+        const auto now = std::chrono::steady_clock::now();
+        if (stream.last_reconnect_attempt.has_value() &&
+            now - *stream.last_reconnect_attempt < std::chrono::seconds(5)) {
+            continue;
+        }
+        stream.last_reconnect_attempt = now;
+
         try {
             // Key may have expired — fetch a fresh one
             stream.current_key.clear();
@@ -207,18 +214,31 @@ void AccountStreamManager::reconnect_disconnected() {
             stream.disconnect_reason.clear();
             stream.last_message_at = std::chrono::steady_clock::now();
             stream.stale_already_emitted = false;
+            stream.last_reconnect_attempt.reset();
+            stream.outage_error_emitted = false;
         } catch (const std::exception& e) {
-            LOG_ERROR(
-                Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_AUTH_FAILED,
-                "[AccountStream] Reconnect failed: " +
-                    stream.config.exchange_name + ": " + e.what(),
-                (nlohmann::json{
-                    {"exchange_name", stream.config.exchange_name},
-                    {"market_type", stream.config.market_type},
-                    {"account_id", stream.config.account_id},
-                    {"trigger", "disconnected_reconnect"},
-                    {"reason", stream.disconnect_reason},
-                    {"what", e.what()}}));
+            const nlohmann::json md{
+                {"exchange_name", stream.config.exchange_name},
+                {"market_type", stream.config.market_type},
+                {"account_id", stream.config.account_id},
+                {"trigger", "disconnected_reconnect"},
+                {"reason", stream.disconnect_reason},
+                {"what", e.what()}};
+            const std::string msg = "[AccountStream] Reconnect failed: " +
+                                    stream.config.exchange_name + ": " +
+                                    e.what();
+            // One ERROR per outage, once it has lasted two minutes.
+            if (!stream.outage_error_emitted &&
+                now - stream.disconnected_since.value() >
+                    std::chrono::minutes(2)) {
+                stream.outage_error_emitted = true;
+                LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_AUTH_FAILED,
+                          msg, md);
+            } else {
+                LOG_WARNING(
+                    Core::TRADING_LOG_EVENT_TYPE_PRIVATE_STREAM_AUTH_FAILED, msg,
+                    md);
+            }
         }
     }
 }

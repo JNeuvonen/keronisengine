@@ -143,7 +143,7 @@ using FetchRealtimeSubscriptionsCallback =
 // Observability layer DTOs — emitted in batches by the engine's heartbeat
 // tick, consumed by live_infra/state_updater.cpp which UPSERTs them into the
 // engine_metric / engine_health / strategy_health / state_machine_health
-// tables. See agentic_system/skills/ENGINE_DIAGNOSTICS.md for the four-layer
+// tables for engine health and strategy observability.
 // diagnostic stack.
 // ---------------------------------------------------------------------------
 
@@ -258,7 +258,7 @@ struct EngineConfig {
     // every 10s from run_periodic_calls_loop when
     // ENGINE_OBSERVABILITY_ENABLED=1. Null by default — the emit tick becomes
     // a no-op if no callback is supplied. See ObservabilityBatch for the
-    // payload shape and agentic_system/skills/ENGINE_DIAGNOSTICS.md.
+    // payload shape for engine diagnostics.
     std::optional<ObservabilityCallback> observability_callback = std::nullopt;
 };
 
@@ -338,6 +338,10 @@ class Engine {
         const std::vector<EngineSignal>& signals);
     void poll_strategy_states();
     void poll_realtime_subscriptions();
+    // Sends a cancel for every resting entry order of each strategy whose
+    // quotes are pulled. Returns how many such orders are still on the books,
+    // cancel-pending ones included, so a caller can wait for the acks.
+    int sweep_pulled_quotes();
     void emit_strategy_telemetry(StrategyTelemetryEvent&& event);
     void drain_strategy_telemetry();
     std::shared_ptr<std::unordered_map<int, StrategyTelemetryEvent>>
@@ -479,6 +483,7 @@ class Engine {
 
     std::vector<Core::Trade> get_trades();
     std::vector<Core::Order> get_orders();
+    std::vector<Core::Order> get_removed_orders();
     EngineStateSnapshot build_realtime_snapshot();
 
     // Read-only snapshot of pending markouts. Returns a copy under
@@ -772,6 +777,8 @@ class Engine {
     AckEngineSignalCallback ack_engine_signal_callback = nullptr;
     std::atomic<std::chrono::steady_clock::time_point>
         last_process_engine_signals_time = std::chrono::steady_clock::now();
+    std::atomic<std::chrono::steady_clock::time_point>
+        last_sweep_pulled_quotes_time = std::chrono::steady_clock::now();
     // A slow handler must not let the next tick fetch the same rows again.
     std::atomic<bool> engine_signals_in_flight{false};
     std::mutex engine_signal_handlers_mutex;
@@ -978,7 +985,7 @@ class Engine {
                            const nlohmann::json& metadata);
     void log_throughput_stats();
 
-    // --- Observability emitter — see ObservabilityBatch + LOGGING.md ---
+    // --- Observability emitter — see ObservabilityBatch ---
     // Called every ~10s from run_periodic_calls_loop. No-op unless
     // observability_callback_ is populated and is_state_ready is true.
     // Strategy + SM health are included every 3rd tick (~30s cadence);
@@ -993,7 +1000,7 @@ class Engine {
 
     // Latency histograms — sampled + reset by sample_latency_histograms at
     // each observability tick. record() call sites live at the order/fill
-    // ack paths. See agentic_system/subsystems/cpp/common/LOG_EVENT_SCHEMA.md.
+    // ack paths.
     LatencyHistogram latency_order_sent_to_ack_;
     LatencyHistogram latency_fill_to_ack_;
 

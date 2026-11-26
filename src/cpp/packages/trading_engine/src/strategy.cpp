@@ -89,6 +89,7 @@ void Core::Strategy::adopt_moving_state(const Core::Strategy &old) {
     this->virtual_balance.store(old.virtual_balance.load());
     // A carry-over, not a pause transition, so no STRATEGY_PAUSED event.
     this->stop_making_markets.store(old.stop_making_markets.load());
+    this->quotes_pulled.store(old.quotes_pulled.load());
 }
 
 Core::Strategy::~Strategy() {
@@ -344,6 +345,22 @@ void Core::Strategy::set_stop_making_markets(bool should_stop,
 
     engine.create_system_log("", level, message, event_type, metadata,
                              this->strategy_config.id);
+}
+
+void Core::Strategy::set_quotes_pulled(bool pulled, const char *reason) {
+    bool expected = !pulled;
+    if (!this->quotes_pulled.compare_exchange_strong(expected, pulled)) return;
+    auto &engine = Core::Engine::getInstance();
+    if (!engine.isInitialized()) return;
+    engine.create_system_log(
+        "", pulled ? Core::LOG_LEVEL_WARNING : Core::LOG_LEVEL_INFO,
+        pulled ? "quotes pulled" : "quotes resumed",
+        pulled ? Core::TRADING_LOG_EVENT_TYPE_QUOTES_PULLED
+               : Core::TRADING_LOG_EVENT_TYPE_QUOTES_RESUMED,
+        nlohmann::json{{"reason", reason ? reason : "UNKNOWN"},
+                       {"strategy_id", this->strategy_config.id},
+                       {"strategy_name", this->strategy_config.strategy_name}},
+        this->strategy_config.id);
 }
 
 void Core::Strategy::process_strategy_decisions(

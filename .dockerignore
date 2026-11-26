@@ -1,0 +1,9 @@
+build/
+.cache/
+.git/
+third_party/
+site/
+deploy/.env
+deploy/accounts.json
+src/rust/hyperliquid_signer/target/
+*.log

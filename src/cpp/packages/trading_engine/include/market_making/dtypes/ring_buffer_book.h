@@ -14,8 +14,8 @@
 //      Deep-read walks (e.g. get_ask_depth, top-N imbalance) walk the
 //      populated bitmap — `__builtin_ctzll` skips empty words in one op.
 //
-//   3. Safe concurrent reads under a single-writer seqlock with no UB:
-//      slots are POD (uint32 tag, uint32 seconds, double qty = 16 bytes).
+//   3. Lock-free read retries under a single-writer seqlock:
+//      slots are 16-byte POD (uint32 tag, uint32 seconds, double qty).
 //      Readers seqlock-retry and never dereference through a tree.
 //
 //   4. Automatic window behavior: as the feed sends add/delete events,
@@ -34,10 +34,7 @@
 //
 //   6. **Runtime-configurable window size.** The ctor takes `window_bits`;
 //      production exchange books use 19 (524K slots, 16 MB virtual),
-//      Polymarket books use 10 (1024 slots, ~32 KB). The template from
-//      earlier phases was removed in favor of runtime sizing so
-//      Core::OrderBook can store rings of either size without cascading
-//      the template through every call site.
+//      Polymarket books use 10 (1024 slots, ~32 KB).
 // ---------------------------------------------------------------------------
 
 #include <algorithm>

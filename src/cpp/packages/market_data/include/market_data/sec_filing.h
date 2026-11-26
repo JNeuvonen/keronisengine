@@ -40,7 +40,7 @@ struct SymbolCikRow {
 using FormSet = std::unordered_set<std::string>;
 
 // Latency pads mirror LATENCY_CONSERVATIVE in
-// data_library/alt_data/sec/pit.py. They must stay in sync with it, since the
+// Point-in-time SEC filing visibility rules.
 // Python research path and the engine have to agree on when a filing became
 // actionable or the backtest is measuring a different strategy than the one
 // that would trade.

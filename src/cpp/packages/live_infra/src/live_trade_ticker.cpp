@@ -41,6 +41,76 @@ void log_order_dropped_pre_send(Core::Engine &engine, const Core::Order &order,
                              strategy_id, order.exchange_name,
                              order.market_type, true);
 }
+
+// Books a fill the venue reported in a create or cancel response through the
+// same path as the order poll and the user-data stream. The ticker computes
+// the delta against the order it holds, so a fill already booked from the
+// stream is not counted again. Returns whether the order is still active.
+bool book_venue_order(Core::Engine &engine, Live::StateUpdater &core,
+                      Core::TradeTicker &ticker, int strategy_id,
+                      const Core::Order &order,
+                      const nlohmann::json &venue_order,
+                      bool ack_final_remainder) {
+    const auto find_active = [&]() -> std::optional<Core::Order> {
+        for (auto &o : ticker.get_orders(true)) {
+            if (o.id == order.id) return o;
+        }
+        return std::nullopt;
+    };
+    if (!venue_order.is_object() || !venue_order.contains("filled") ||
+        !venue_order["filled"].is_number()) {
+        return find_active().has_value();
+    }
+    Core::OrderResNormalized res;
+    try {
+        res = Core::OrderResNormalized::from_ccxt_user_data_stream_msg(
+            venue_order);
+        res.last_updated_timestamp =
+            venue_order.value("lastUpdateTimestamp", nlohmann::json())
+                    .is_number()
+                ? venue_order["lastUpdateTimestamp"].get<long long>()
+                : DatetimeUtils::get_current_time_ms();
+        if (!venue_order.value("lastTradeTimestamp", nlohmann::json())
+                 .is_number()) {
+            res.last_trade_timestamp = res.last_updated_timestamp;
+        }
+    } catch (const std::exception &e) {
+        engine.create_system_log(
+            order.symbol, Core::LOG_LEVEL_ERROR,
+            std::string("[ccxt_order_res_parse_failed]: ") + e.what(),
+            Core::TRADING_LOG_EVENT_TYPE_USER_DATA_STREAM_PARSE_FAILED,
+            {{"order_id", order.id}, {"venue_order", venue_order}},
+            strategy_id, order.exchange_name, order.market_type, true);
+        return find_active().has_value();
+    }
+    if (res.client_order_id != order.client_order_id) {
+        engine.create_system_log(
+            order.symbol, Core::LOG_LEVEL_ERROR,
+            "[ccxt_order_res_mismatch]: response is for another order",
+            Core::TRADING_LOG_EVENT_TYPE_ORDER_STATE_VERIFY_MISMATCH,
+            {{"order_id", order.id},
+             {"client_order_id", order.client_order_id},
+             {"venue_order", venue_order}},
+            strategy_id, order.exchange_name, order.market_type, true);
+        return find_active().has_value();
+    }
+
+    auto current = find_active();
+    if (current.has_value() &&
+        res.filled_quantity > current->filled_quantity) {
+        // A response without an executed average would book at the limit;
+        // keep the order so the user-data stream books it at its price.
+        if (!res.has_fill_price) return true;
+        core.handle_order_state_check(*current, res);
+        current = find_active();
+    }
+    if (ack_final_remainder && current.has_value() &&
+        res.status == Core::ORDER_STATUS_NOT_WORKING) {
+        engine.order_canceled_ack(*current);
+        return false;
+    }
+    return current.has_value();
+}
 }  // namespace
 
 Live::LiveTradeTicker::LiveTradeTicker(
@@ -222,6 +292,7 @@ void Live::LiveTradeTicker::handle_ccxt_order_result(
     }
 
     engine.order_created_ack(order);
+    this->core.note_order_accepted_by_venue(order.account_id);
 
     // exchange_order_id intentionally NOT set from the sync response — the
     // user-data WS stream is the canonical population path for binance/ccxt
@@ -239,6 +310,11 @@ void Live::LiveTradeTicker::handle_ccxt_order_result(
                              "[ccxt_order_created]",
                              Core::TRADING_LOG_EVENT_TYPE_ORDER_CREATED, meta,
                              this->strategy_id, "", "", true);
+
+    if (result.order.has_value()) {
+        book_venue_order(engine, core, *this, this->strategy_id, order,
+                         result.order.value(), true);
+    }
 }
 
 void Live::LiveTradeTicker::on_create_order_impl(Core::Engine &engine,
@@ -254,6 +330,8 @@ void Live::LiveTradeTicker::on_create_order_impl(Core::Engine &engine,
 
     if (core.is_paper_strategy(this->strategy_id)) {
         handle_ccxt_order_result(engine, order, {.success = true});
+        core.paper_exchange().submit(order,
+                                     DatetimeUtils::get_current_time_ms());
         return;
     }
 
@@ -290,7 +368,25 @@ void Live::LiveTradeTicker::on_create_order_impl(Core::Engine &engine,
         }
         // Generic ccxt path (binance, bybit, gateio, ...) — synchronous: wait
         // for the proxy result, dispatch on success/failure.
-        const auto res_json = core.create_order(order);
+        int http_status = -1;
+        const auto res_json = core.create_order(order, &http_status);
+        // No response or a proxy 5xx: the order may be resting or filled at
+        // the venue. Keep it unacked; poll_check_unacked_orders resolves it
+        // by lookup and removes it only on a confirmed "not found".
+        if (!res_json.has_value() &&
+            (http_status == 0 || http_status >= 500) &&
+            !order.client_order_id.empty()) {
+            nlohmann::json meta;
+            meta["order"] = order.to_json();
+            meta["http_status"] = http_status;
+            engine.create_system_log(
+                order.symbol, Core::LOG_LEVEL_WARNING,
+                "[ccxt_order_unconfirmed]: create result unknown, resolving by "
+                "lookup",
+                Core::TRADING_LOG_EVENT_TYPE_ORDER_NOT_FOUND_ON_EXCHANGE, meta,
+                this->strategy_id, "", "", true);
+            return;
+        }
         Core::OrderCreationResult result;
         if (res_json.has_value()) {
             const auto &j = res_json.value();
@@ -298,6 +394,9 @@ void Live::LiveTradeTicker::on_create_order_impl(Core::Engine &engine,
                 result.success = j.value("success", false);
                 result.exchange_order_id = j.value("exchange_order_id", "");
                 result.error_msg = j.value("error_msg", "");
+                if (j.contains("order") && j["order"].is_object()) {
+                    result.order = j["order"];
+                }
             } catch (const std::exception &e) {
                 result.error_msg =
                     "proxy response parse failed: " + std::string(e.what());
@@ -461,7 +560,12 @@ void Live::LiveTradeTicker::on_cancel_orders_bulk(
     if (orders.empty()) return;
 
     if (core.is_paper_strategy(this->strategy_id)) {
-        for (auto *o : orders) this->on_order_cancel_success(engine, *o);
+        const auto now_ms = DatetimeUtils::get_current_time_ms();
+        for (auto *o : orders) {
+            if (core.paper_exchange().cancel(o->id, now_ms)) {
+                this->on_order_cancel_success(engine, *o);
+            }
+        }
         return;
     }
 
@@ -543,7 +647,10 @@ void Live::LiveTradeTicker::on_cancel_orders_bulk(
 void Live::LiveTradeTicker::on_cancel_order_impl(Core::Engine &engine,
                                                  Core::Order &order) {
     if (core.is_paper_strategy(this->strategy_id)) {
-        this->on_order_cancel_success(engine, order);
+        if (core.paper_exchange().cancel(order.id,
+                                         DatetimeUtils::get_current_time_ms())) {
+            this->on_order_cancel_success(engine, order);
+        }
         return;
     }
     if (order.exchange_enum == Core::Exchange::ASTER) {
@@ -565,8 +672,14 @@ void Live::LiveTradeTicker::on_cancel_order_impl(Core::Engine &engine,
     // is_cancel_ready_to_be_sent only lets a binance cancel go out once the
     // create is acked, so a "gone" (-2011) here can't be a create/cancel race —
     // it reliably means the order is genuinely gone (cancelled / filled /
-    // already cancelled). Either way, remove it.
+    // already cancelled). Either way, remove it; the removed-orders list still
+    // matches a fill that arrives after this.
     if (st == "cancelled" || st == "gone") {
+        // A cancel can land after a partial fill; the response carries it.
+        if (res->contains("order")) {
+            book_venue_order(engine, core, *this, this->strategy_id, order,
+                             (*res)["order"], false);
+        }
         this->on_order_cancel_success(engine, order);
         return;
     }

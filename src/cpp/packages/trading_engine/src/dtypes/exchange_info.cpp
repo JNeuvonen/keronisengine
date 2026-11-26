@@ -64,7 +64,7 @@ std::vector<std::string> ExchangeInfo::get_symbols(
                 std::chrono::steady_clock::now();
             sync_symbols_to_disk(exchange_name, market_type);
         } else {
-            LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_EXCHANGE_INFO_FALLBACK_TO_DISK,
+            LOG_WARNING(Core::TRADING_LOG_EVENT_TYPE_EXCHANGE_INFO_FALLBACK_TO_DISK,
                         "ExchangeInfo::get_symbols: HTTP returned empty for " +
                             exchange_name + " " + market_type +
                             ", falling back to disk cache",
@@ -88,7 +88,7 @@ std::vector<std::string> ExchangeInfo::get_symbols(
 
         return symbols;
     } catch (...) {
-        LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_EXCHANGE_INFO_FALLBACK_TO_DISK,
+        LOG_WARNING(Core::TRADING_LOG_EVENT_TYPE_EXCHANGE_INFO_FALLBACK_TO_DISK,
                     "ExchangeInfo::get_symbols: exception caught for " +
                         exchange_name + " " + market_type +
                         ", falling back to disk cache",

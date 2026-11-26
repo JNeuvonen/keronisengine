@@ -19,7 +19,7 @@ namespace MarketData {
 // above, in AltDataManager.
 //
 // THE INVARIANT, matching SECData.facts_as_of in
-// data_library/alt_data/sec/pit.py: a fact is visible only once
+// Point-in-time visibility: a fact is visible only once
 // filed_ts_ms + kFactsDefaultMs <= as_of, and for each
 // (taxonomy, tag, unit, period_start, period_end) only the latest such filing
 // counts. Amendments are the reason -- the same period gets refiled with a

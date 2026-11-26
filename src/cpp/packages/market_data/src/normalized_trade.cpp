@@ -80,6 +80,7 @@ NormalizedParsedTrade NormalizedParsedTrade::from_simdjson(
             ret.timestamp = data["E"].get_uint64().value();
             ret.is_buyer_maker = data["m"].get_bool().value();
             ret.trade_id = std::to_string(data["t"].get_uint64().value());
+            ret.trade_time_ms = data["T"].get_int64().value();
         }
     } else if (exchange_name == "gateio") {
         std::string currency_pair =

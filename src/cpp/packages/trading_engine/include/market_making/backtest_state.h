@@ -215,13 +215,15 @@ class BacktestState {
         if (fill_record_stream_.is_open()) fill_record_stream_.flush();
     }
     void init_exchanges();
-    void backtest_update_inventory(const Order& order, bool is_taker_execution);
+    void backtest_update_inventory(const Order& order, const mpfr::mpreal& fill_price,
+                                   bool is_taker_execution);
     void update_quote_asset(const std::string& exchange_name,
                             const std::string& market_type,
                             long long account_id, const std::string& asset,
                             const mpfr::mpreal& quote_asset_delta);
-    void update_fees(const Order& order, bool is_taker_execution);
-    void update_pnl(const Order& order);
+    void update_fees(const Order& order, const mpfr::mpreal& fill_price,
+                     bool is_taker_execution);
+    void update_pnl(const Order& order, const mpfr::mpreal& fill_price);
     void update_engine_state_snapshot(const EngineStateSnapshot& snapshot);
     // Writes a JSON summary (PnL, fees, win rate, max DD, Sharpe from
     // the daily NAV samples, trade counts). Opt-in: runner calls this

@@ -4,7 +4,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
 
 #include "chrono_utils.h"
 #include "datetime_utils.h"
@@ -85,16 +87,6 @@ void seed_backtest_symbol_precision(const Core::SimulationInput &input) {
         const auto sep = key.find(':');
         Core::Engine::getInstance().add_symbol_exchange_info(
             key.substr(0, sep), key.substr(sep + 1), infos);
-        std::cout << "[backtest] seeded precision for " << infos.size() << " "
-                  << key << " symbols (price tick "
-                  << US_EQUITY_PRICE_TICK << ")" << std::endl;
-        if (!infos.empty()) {
-            const auto probe = Core::Engine::getInstance().get_price_precision(
-                infos.front().symbol, key.substr(0, sep), key.substr(sep + 1));
-            std::cout << "[backtest] PROBE get_price_precision("
-                      << infos.front().symbol << ") = " << probe
-                      << " (expect 2)" << std::endl;
-        }
     }
 }
 
@@ -106,9 +98,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+#ifdef __linux__
     // Allow any same-uid process to attach with ptrace (gdb watchdog needs
     // this under YAMA ptrace_scope=1). Strictly an observability hook.
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
 
     BacktestRunner::RunnerInput runner_input =
         BacktestRunner::Config::get_runner_input(argv);

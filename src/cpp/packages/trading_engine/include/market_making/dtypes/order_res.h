@@ -31,6 +31,8 @@ struct OrderResNormalized {
     mpfr::mpreal price;
     mpfr::mpreal orig_quantity;
     mpfr::mpreal filled_quantity;
+    // False when price is the limit, not an executed average.
+    bool has_fill_price = false;
 
     long long timestamp;
     long long last_updated_timestamp;

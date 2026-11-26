@@ -43,6 +43,7 @@
           "only_listed": true
         }
       },
+      "record": ["trades"],
       "book_ticker": {
         "symbols": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT", "DOGEUSDT", "HYPEUSDT", "BNBUSDT",
                     "BTCUSDC", "ETHUSDC", "XRPUSDC", "SOLUSDC", "DOGEUSDC", "HYPEUSDC"]
@@ -65,13 +66,12 @@
       }
     },
     {
-      "exchange": "aster",
+      "exchange": "lighter",
       "market_type": "swap",
-      "book_ticker": {
-        "symbols": ["XRPUSDT"],
-        "solo_connections": ["BTCUSDT", "ETHUSDT", "XRPUSDT", "SOLUSDT"],
-        "group_size": 15
-      }
+      "trades": {"symbols": ["BTCUSDC"]},
+      "book_ticker": {"symbols": ["BTCUSDC"], "solo_connections": ["BTCUSDC"]},
+      "l2": {"symbols": ["BTCUSDC"], "solo_connections": ["BTCUSDC"]},
+      "record": ["book_ticker", "l2", "trades"]
     }
   ],
   "polymarket": {"stream": true}

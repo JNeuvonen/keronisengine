@@ -190,6 +190,13 @@ void StateMachineSyncer::sync_state_machines() {
 
     for (auto& sm : machines) {
         void* key = sm.get();
+        try {
+            sm->run_background_work();
+        } catch (const std::exception& e) {
+            LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_SM_SYNCER_PROGRESS,
+                      "SM background work failed: " + std::string(e.what()),
+                      (nlohmann::json{{"sm_name", sm->get_name()}}));
+        }
         if (sm->is_fully_synced()) {
             warmup_start_time_.erase(key);
             last_warmup_timeout_emit_.erase(key);

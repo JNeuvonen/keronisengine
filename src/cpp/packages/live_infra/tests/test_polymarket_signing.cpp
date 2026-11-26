@@ -336,7 +336,7 @@ TEST_CASE("Secp256k1 sign and verify determinism", "[polymarket][crypto]") {
 
 // ──────────────────────────────────────────────────────────────────────────
 // Cross-language comparison: use EXACT same inputs as
-// scripts/utilities/polymarkets/compare_signing_python.py
+// Cross-checked against py_clob_client EIP-712 signing vectors.
 // ──────────────────────────────────────────────────────────────────────────
 
 TEST_CASE("Cross-language signing comparison", "[polymarket][compare]") {

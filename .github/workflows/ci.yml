@@ -25,7 +25,10 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build autoconf autoconf-archive automake libtool pkg-config bison flex
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build autoconf autoconf-archive automake libtool pkg-config bison flex python3-venv
+      - run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --no-cache-dir pyarrow
       - run: |
           git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
@@ -42,3 +45,5 @@ jobs:
             -DONNXRUNTIME_ROOT="$ORT"
       - run: cmake --build build
       - run: ./build/bin/trading_engine_tests
+      - run: ./build/bin/live_infra_tests "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
+      - run: PYTHON=.venv/bin/python ./examples/quickstart_backtest/run.sh ./build/bin/backtest_runner

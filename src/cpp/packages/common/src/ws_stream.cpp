@@ -7,6 +7,7 @@
 #include "ccxt_utils.h"
 #include "market_data/config.h"
 #include "market_data/utils.h"
+#include "lighter_markets.h"
 
 bool WsStream::is_wss() const { return wsurl_.rfind("wss://", 0) == 0; }
 
@@ -246,6 +247,35 @@ void WsStream::send_subscribe_messages() {
     }
 }
 
+// Lighter channels are addressed by market id, resolved from its REST
+// listing: order_book/{id}, trade/{id}, ticker/{id}.
+void WsStream::send_lighter_subscribe_messages(const std::string& channel) {
+    auto& markets = LighterDirect::LighterMarkets::instance();
+    markets.ensure_loaded();
+    int subscribed = 0;
+    for (const auto& stream_info : stream_infos_) {
+        const auto market = markets.by_symbol(stream_info.symbol);
+        if (!market.has_value()) {
+            error_log_("lighter: no market id for " + stream_info.symbol +
+                       "; " + channel + " not subscribed");
+            continue;
+        }
+        send_message(lighter_subscribe_message(
+            "subscribe", channel + "/" + std::to_string(market->market_id)));
+        ++subscribed;
+    }
+    info_log_("Subscribed to " + std::to_string(subscribed) + " lighter " +
+              channel + " channels");
+}
+
+std::string WsStream::lighter_subscribe_message(const std::string& type,
+                                                const std::string& channel) {
+    nlohmann::json msg;
+    msg["type"] = type;
+    msg["channel"] = channel;
+    return msg.dump();
+}
+
 void WsStream::send_ohlcv_subscribe_messages() {
     const std::string exchange_name = exchange_name_.value();
     const std::string market_type = market_type_.value();
@@ -430,6 +460,11 @@ void WsStream::send_trade_subscribe_messages() {
     const std::string exchange_name = exchange_name_.value();
     const std::string market_type = market_type_.value();
 
+    if (exchange_name == "lighter") {
+        send_lighter_subscribe_messages("trade");
+        return;
+    }
+
     if (exchange_name == "binance") {
         std::vector<std::string> batch_params;
         const int BATCH_SIZE = 200;
@@ -522,6 +557,11 @@ void WsStream::send_lob_subscribe_messages() {
     const std::string exchange_name = exchange_name_.value();
     const std::string market_type = market_type_.value();
 
+    if (exchange_name == "lighter") {
+        send_lighter_subscribe_messages("order_book");
+        return;
+    }
+
     if (exchange_name == "binance") {
         std::vector<std::string> batch_params;
         const int BATCH_SIZE = 200;
@@ -592,6 +632,11 @@ void WsStream::send_lob_subscribe_messages() {
 void WsStream::send_book_ticker_subscribe_messages() {
     const std::string exchange_name = exchange_name_.value();
     const std::string market_type = market_type_.value();
+
+    if (exchange_name == "lighter") {
+        send_lighter_subscribe_messages("ticker");
+        return;
+    }
 
     // Binance-compatible book ticker subscription (also works for Aster)
     if (exchange_name == "binance" || exchange_name == "aster") {

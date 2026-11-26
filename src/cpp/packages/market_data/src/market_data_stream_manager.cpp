@@ -302,16 +302,16 @@ static void log_backfill_coverage(
     const std::vector<std::shared_ptr<MarketData::OhlcvDataset>>& datasets,
     const std::string& phase) {
     std::map<std::string, std::array<int, 3>> by_exchange;  // {ok, empty, stub}
-    std::vector<std::string> empty_symbols;
-    std::vector<std::string> stub_symbols;
+    std::map<std::string, std::vector<std::string>> empty_symbols;
+    std::map<std::string, std::vector<std::string>> stub_symbols;
 
     for (const auto& dataset : datasets) {
         auto& counts = by_exchange[dataset->meta.exchange_name];
         dataset->meta.read_last_tick_close_time_ms();
         if (dataset->meta.last_storage_tick_close_time_ms <= 0) {
             ++counts[1];
-            if (empty_symbols.size() < 25)
-                empty_symbols.push_back(dataset->meta.symbol);
+            auto& sample = empty_symbols[dataset->meta.exchange_name];
+            if (sample.size() < 25) sample.push_back(dataset->meta.symbol);
             continue;
         }
         // "Has bars" is not the check. A dataset holding a single partition,
@@ -321,8 +321,8 @@ static void log_backfill_coverage(
         // which is exactly why that test missed ~6k of them.
         if (MarketData::has_only_current_month_partition(dataset->meta)) {
             ++counts[2];
-            if (stub_symbols.size() < 25)
-                stub_symbols.push_back(dataset->meta.symbol);
+            auto& sample = stub_symbols[dataset->meta.exchange_name];
+            if (sample.size() < 25) sample.push_back(dataset->meta.symbol);
             continue;
         }
         ++counts[0];
@@ -340,9 +340,11 @@ static void log_backfill_coverage(
                          std::to_string(ok) + "/" + std::to_string(total),
                      meta);
         } else {
-            meta["no_bars_sample"] = empty_symbols;
-            meta["stub_sample"] = stub_symbols;
-            LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_MARKET_DATA_INIT_PHASE,
+            meta["no_bars_sample"] = empty_symbols[exchange_name];
+            meta["stub_sample"] = stub_symbols[exchange_name];
+            // New listings are legitimately stub-only; a failed backfill is
+            // reported by its own outcome log.
+            LOG_WARNING(Core::TRADING_LOG_EVENT_TYPE_MARKET_DATA_INIT_PHASE,
                       "[backfill_coverage] " + exchange_name +
                           " INCOMPLETE: " + std::to_string(ok) + "/" +
                           std::to_string(total) + " with history, " +

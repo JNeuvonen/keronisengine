@@ -449,7 +449,7 @@ MarketData::OhlcvDataset::init_sync_bars() {
 
     long long bars_fetched = 0;
     bool fetch_failed = false;
-    // Mirrors POLYGON_BARS_WINDOW_DAYS in cpp_live_proxy's historical_data.py.
+    // Window size in days for Polygon historical bar fetches.
     // Stepping by less than the server window just wastes calls; more skips
     // data.
     constexpr long long kPolygonFetchWindowMs = 60LL * 24 * 60 * 60 * 1000;

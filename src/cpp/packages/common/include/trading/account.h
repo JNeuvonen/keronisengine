@@ -36,7 +36,8 @@ class Account {
             LoggingCallback info_callback, LoggingCallback error_callback);
     ~Account();
 
-    std::optional<nlohmann::json> create_order(const Core::Order& order);
+    std::optional<nlohmann::json> create_order(const Core::Order& order,
+                                               int* http_status = nullptr);
 
     std::vector<PolymarketDirect::PolymarketClient::SignedOrderBody>
     sign_polymarket_orders(const std::vector<Core::Order>& orders);
@@ -63,8 +64,7 @@ class Account {
         const std::string& symbol);
     std::vector<Core::OrderResNormalized> get_orders_on_symbol_cached(
         const std::string& symbol);
-    std::optional<Core::OrderResNormalized> query_invidual_order(
-        const Core::Order& order);
+    CcxtProxy::OrderLookup query_invidual_order(const Core::Order& order);
 
     std::vector<std::string> get_active_symbols();
     std::string get_ohlcv_stream_url(std::vector<std::string> symbols,

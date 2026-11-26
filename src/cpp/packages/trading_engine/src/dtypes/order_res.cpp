@@ -71,13 +71,22 @@ Core::OrderResNormalized::from_ccxt_user_data_stream_msg(
     res.client_order_id = client_order_id;
     res.exchange_order_id = order_json["id"].get<std::string>();
     res.status = order_json["status"].get<std::string>();
-    if (order_json.contains("average") && !order_json["average"].is_null()) {
-        res.price = mpfr::mpreal(order_json["average"].get<double>());
-    } else {
-        res.price = mpfr::mpreal(order_json["price"].get<double>());
-    }
     res.orig_quantity = mpfr::mpreal(order_json["amount"].get<double>());
     res.filled_quantity = mpfr::mpreal(order_json["filled"].get<double>());
+    const auto positive = [&](const char *key) {
+        return order_json.contains(key) && order_json[key].is_number() &&
+               order_json[key].get<double>() > 0;
+    };
+    // Only the venue's average is a fill price. Without it ccxt fills
+    // "cost" in as filled x limit, so cost / filled is the limit too.
+    if (positive("average")) {
+        res.price = mpfr::mpreal(order_json["average"].get<double>());
+        res.has_fill_price = true;
+    } else {
+        res.price = order_json.contains("price") && order_json["price"].is_number()
+                        ? mpfr::mpreal(order_json["price"].get<double>())
+                        : mpfr::mpreal(0);
+    }
     res.timestamp = order_json["timestamp"].get<long long>();
 
     if (order_json.contains("lastTradeTimestamp") &&

@@ -432,10 +432,14 @@ ResolvedCoverage resolve_impl(const CoverageConfig& config,
                      market.l2->connections, previous.lob_connections);
             out.lob_connections.insert(out.lob_connections.end(),
                                        connections.begin(), connections.end());
+            // Lighter's websocket opens every order_book subscription with
+            // a full snapshot, so there is no REST seed to fetch.
+            const bool seeded_by_stream = exchange == "lighter";
             for (const auto& symbol : l2_symbols) {
                 out.orderbooks.push_back({exchange, market_type, symbol});
-                out.rest_orderbook_snapshots.push_back(
-                    {exchange, market_type, symbol});
+                if (!seeded_by_stream)
+                    out.rest_orderbook_snapshots.push_back(
+                        {exchange, market_type, symbol});
             }
         }
 

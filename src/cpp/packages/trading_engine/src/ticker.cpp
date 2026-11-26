@@ -86,6 +86,8 @@ const char *construction_result_to_reason_code(
             return "ENGINE_CONSTRUCT_ORDER_FAILED";
         case Core::STRATEGY_STOP_MAKING_MARKETS:
             return "STRATEGY_STOP_MAKING_MARKETS";
+        case Core::STRATEGY_QUOTES_PULLED:
+            return "STRATEGY_QUOTES_PULLED";
         case Core::VALID:
             return "VALID";
     }
@@ -432,6 +434,18 @@ void Core::TradeTicker::enter_trade_order_filled(Engine &engine,
             from_removed_state = true;
             fill_info.is_order_cancelled_before_fill = true;
             fill_info.order_cancel_timestamp = removed_it->cancel_timestamp;
+        }
+
+        Order &order_ref = *order_ptr;
+
+        mpfr::mpreal fill_delta =
+            Core::Utils::get_order_fill_size_delta(order_ref, fill_info);
+
+        if (fill_delta <= MPREAL_ZERO) {
+            return;
+        }
+
+        if (from_removed_state) {
             const long long fill_received_at_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
@@ -453,15 +467,6 @@ void Core::TradeTicker::enter_trade_order_filled(Engine &engine,
                 TRADING_LOG_EVENT_TYPE_LATE_FILL_ON_CANCELLED, md,
                 fill_info.strategy_id, fill_info.exchange_name,
                 fill_info.market_type);
-        }
-
-        Order &order_ref = *order_ptr;
-
-        mpfr::mpreal fill_delta =
-            Core::Utils::get_order_fill_size_delta(order_ref, fill_info);
-
-        if (fill_delta <= MPREAL_ZERO) {
-            return;
         }
 
         if (!from_removed_state) {
@@ -521,16 +526,13 @@ void Core::TradeTicker::enter_trade_order_filled(Engine &engine,
         if (is_order_fully_filled) {
             order_to_update->ack_state_removal = engine.get_time();
             order_fully_filled = true;
-            if (from_removed_state) {
-                orders_removed_from_state.erase(
-                    std::remove_if(orders_removed_from_state.begin(),
-                                   orders_removed_from_state.end(),
-                                   [&](const Order &o) {
-                                       return o.id == fill_info.order_id;
-                                   }),
-                    orders_removed_from_state.end());
-            } else {
+            // A filled order stays on the removed list so a duplicate report of
+            // its fill matches it and books nothing.
+            if (!from_removed_state) {
+                Order retired = order_ref;
+                retired.ack_state_removal = engine.get_time();
                 this->erase_order_from_state(engine, order_it);
+                orders_removed_from_state.push_back(std::move(retired));
             }
         }
     }  // Lock is released here
@@ -605,6 +607,19 @@ void Core::TradeTicker::exit_trade_order_filled(Engine &engine,
             from_removed_state = true;
             fill_info.is_order_cancelled_before_fill = true;
             fill_info.order_cancel_timestamp = removed_it->cancel_timestamp;
+        }
+
+        Order &order_ref = *order_ptr;
+
+        mpfr::mpreal fill_delta =
+            Core::Utils::get_order_fill_size_delta(order_ref, fill_info);
+
+        if (fill_delta <= MPREAL_ZERO) {
+            // can happen when exchange sends order fills in incorrect order
+            return;
+        }
+
+        if (from_removed_state) {
             const long long fill_received_at_ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch())
@@ -626,16 +641,6 @@ void Core::TradeTicker::exit_trade_order_filled(Engine &engine,
                 TRADING_LOG_EVENT_TYPE_LATE_FILL_ON_CANCELLED, md,
                 fill_info.strategy_id, fill_info.exchange_name,
                 fill_info.market_type);
-        }
-
-        Order &order_ref = *order_ptr;
-
-        mpfr::mpreal fill_delta =
-            Core::Utils::get_order_fill_size_delta(order_ref, fill_info);
-
-        if (fill_delta <= MPREAL_ZERO) {
-            // can happen when exchange sends order fills in incorrect order
-            return;
         }
 
         if (!from_removed_state) {
@@ -694,16 +699,13 @@ void Core::TradeTicker::exit_trade_order_filled(Engine &engine,
             order_ref.quantity - MPREAL_EPSILON_E_10) {
             order_to_update->ack_state_removal = engine.get_time();
             order_fully_filled = true;
-            if (from_removed_state) {
-                orders_removed_from_state.erase(
-                    std::remove_if(orders_removed_from_state.begin(),
-                                   orders_removed_from_state.end(),
-                                   [&](const Order &o) {
-                                       return o.id == fill_info.order_id;
-                                   }),
-                    orders_removed_from_state.end());
-            } else {
+            // A filled order stays on the removed list so a duplicate report of
+            // its fill matches it and books nothing.
+            if (!from_removed_state) {
+                Order retired = order_ref;
+                retired.ack_state_removal = engine.get_time();
                 this->erase_order_from_state(engine, order_it);
+                orders_removed_from_state.push_back(std::move(retired));
             }
         }
     }
@@ -875,16 +877,13 @@ void Core::TradeTicker::mm_trade_order_filled(Engine &engine,
             order_ref.quantity - MPREAL_EPSILON_E_10) {
             order_to_update->ack_state_removal = engine.get_time();
             order_fully_filled = true;
-            if (from_removed_state) {
-                orders_removed_from_state.erase(
-                    std::remove_if(orders_removed_from_state.begin(),
-                                   orders_removed_from_state.end(),
-                                   [&](const Order &o) {
-                                       return o.id == fill_info.order_id;
-                                   }),
-                    orders_removed_from_state.end());
-            } else {
+            // A filled order stays on the removed list so a duplicate report of
+            // its fill matches it and books nothing.
+            if (!from_removed_state) {
+                Order retired = order_ref;
+                retired.ack_state_removal = engine.get_time();
                 this->erase_order_from_state(engine, order_it);
+                orders_removed_from_state.push_back(std::move(retired));
             }
         }
     }  // Lock released
@@ -989,6 +988,11 @@ void Core::TradeTicker::add_synthethic_order_for_event_creation(
     const Order &order) {
     std::lock_guard<std::mutex> lock(this->trading_mutex);
     this->orders.push_back(order);
+}
+
+std::vector<Core::Order> Core::TradeTicker::get_removed_orders() {
+    std::lock_guard<std::mutex> lock(this->trading_mutex);
+    return this->orders_removed_from_state;
 }
 
 std::vector<Core::Order> Core::TradeTicker::get_orders(bool require_lock) {
@@ -1394,6 +1398,12 @@ void Core::TradeTicker::on_cancel_rm_from_state(Engine &engine,
                          [&order](const Order &o) { return o.id == order.id; });
         if (order_it == this->orders.end()) {
             this->unacked_new_cancels.erase(get_order_cancel_key(order));
+            // A fill or an earlier cancel report already removed it.
+            if (std::any_of(this->orders_removed_from_state.begin(),
+                            this->orders_removed_from_state.end(),
+                            [&order](const Order &o) { return o.id == order.id; })) {
+                return;
+            }
             engine.create_system_log(
                 this->symbol, LOG_LEVEL_ERROR,
                 "on_cancel_rm_from_state: Order not found in orders: " +
@@ -1428,9 +1438,9 @@ void Core::TradeTicker::on_cancel_rm_from_state(Engine &engine,
 
         order_to_update->ack_state_removal = engine.get_time();
 
-        if (order_to_update->is_prediction_market_order) {
-            this->orders_removed_from_state.push_back(*order_to_update);
-        }
+        // Kept so a fill that arrives after the removal still matches its
+        // order; purge_stale_removed_orders drops it an hour later.
+        this->orders_removed_from_state.push_back(*order_to_update);
 
         if (creation_failed) {
             const auto &key =
@@ -1806,6 +1816,10 @@ Core::TradeTicker::construct_order(Engine &engine, Strategy &strategy,
                                     std::optional<Core::Order>> {
         if (strategy.stop_making_markets.load()) {
             return {Core::STRATEGY_STOP_MAKING_MARKETS, std::nullopt};
+        }
+        if (strategy.quotes_pulled.load() &&
+            Core::Strategy::is_quote(params.type, params.is_trade_close_order)) {
+            return {Core::STRATEGY_QUOTES_PULLED, std::nullopt};
         }
 
         if (params.is_trade_close_order) {

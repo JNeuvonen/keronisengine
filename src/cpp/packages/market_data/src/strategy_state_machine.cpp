@@ -251,6 +251,8 @@ void StrategyStateMachine::stream_disconnected(const std::string& symbol,
                                                const std::string& exchange_name,
                                                const std::string& market_type,
                                                MarketEvent::Type event_type) {
+    if (event_type == MarketEvent::TRADE)
+        on_trade_stream_disconnected(symbol, exchange_name, market_type);
     if (!deps_initialized_.load(std::memory_order_acquire)) return;
     std::string dep_key = SMMarketDataDependency::make_key(
         symbol, exchange_name, market_type, event_type);

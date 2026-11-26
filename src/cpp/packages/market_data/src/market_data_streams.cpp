@@ -25,6 +25,8 @@
 #include "ip_rotator.h"
 #include "market_data/bar.h"
 #include "market_data/dataset_manager.h"
+#include "market_data/depth_history.h"
+#include "market_data/lighter_order_book.h"
 #include "market_data/forming_klines.h"
 #include "market_data/normalized_trade.h"
 #include "market_data/polygon_second_bars.h"
@@ -33,6 +35,7 @@
 #include "market_making/engine.h"
 #include "market_making/utils.h"
 #include "threadpool.h"
+#include "lighter_markets.h"
 #include "ws_stream.h"
 
 // Rate-limited emitter for per-message parse errors. These live on hot
@@ -65,7 +68,90 @@ void emit_parse_error(const std::string& exchange, const std::string& market,
                 md, -1, exchange, market);
         });
 }
+
+void emit_lighter_out_of_sync(const std::string &symbol,
+                              const std::string &exchange,
+                              const std::string &market,
+                              const std::string &reason) {
+    g_parse_error_emitter.emit_if_allowed(
+        "orderbook_out_of_sync|" + exchange + "|" + market + "|" + symbol,
+        30000, [&](uint64_t suppressed) {
+            nlohmann::json md = {
+                {"detection_reason", reason},
+                {"events_suppressed_since_last_emit", suppressed},
+            };
+            Core::Engine::getInstance().create_system_log(
+                symbol, Core::LOG_LEVEL_WARNING,
+                "Lighter order book out of sync (" + reason +
+                    "); resubscribing for a snapshot",
+                Core::TRADING_LOG_EVENT_TYPE_ORDERBOOK_OUT_OF_SYNC, md, -1,
+                exchange, market);
+        });
+}
+
+long long now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+void append_number(std::string &out, double value) {
+    char buf[32];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), value);
+    out.append(buf, res.ptr);
+}
+
+void append_number(std::string &out, long long value) {
+    char buf[24];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), value);
+    out.append(buf, res.ptr);
+}
+
+// Binance depthUpdate level shape: [["price","qty"],...].
+void append_pair_levels(std::string &out,
+                        const std::vector<MarketData::DepthLevel> &levels) {
+    out += '[';
+    for (size_t i = 0; i < levels.size(); ++i) {
+        if (i) out += ',';
+        out += "[\"";
+        append_number(out, levels[i].price);
+        out += "\",\"";
+        append_number(out, levels[i].quantity);
+        out += "\"]";
+    }
+    out += ']';
+}
+
+// Full-refresh level shape: [{"price":p,"quantity":q},...].
+void append_object_levels(std::string &out,
+                          const std::vector<MarketData::DepthLevel> &levels) {
+    out += '[';
+    for (size_t i = 0; i < levels.size(); ++i) {
+        if (i) out += ',';
+        out += "{\"price\":";
+        append_number(out, levels[i].price);
+        out += ",\"quantity\":";
+        append_number(out, levels[i].quantity);
+        out += '}';
+    }
+    out += ']';
+}
+
+constexpr long long LIGHTER_RESUBSCRIBE_MIN_INTERVAL_MS = 2000;
+constexpr long long LIGHTER_SNAPSHOT_WAIT_MS = 5000;
+constexpr int LIGHTER_MAX_CROSSED_UPDATES = 20;
+constexpr long long LIGHTER_PRICE_UPDATE_INTERVAL_MS = 1000;
 }  // namespace
+
+namespace MarketData {
+struct LighterBookStream {
+    LighterOrderBook book;
+    std::string symbol;
+    std::string depth_key;
+    long long last_resubscribe_ms = 0;
+    int crossed_streak = 0;
+};
+}  // namespace MarketData
 
 MarketData::MarketDataStreams::MarketDataStreams() noexcept
     : bar_aggregator(BarAggregator::getInstance()),
@@ -127,7 +213,15 @@ MarketData::MarketDataStreams::assign_bba_slots(
                                            info.market_type};
             it = bba_slot_ids_.emplace(key, slot_id).first;
         }
-        (*slots)[info.symbol] = it->second;
+        // Lighter's ticker carries the bare coin ("s":"BTC") in the field the
+        // handler scans, so its slot is keyed by the coin.
+        if (info.exchange_name == "lighter" && info.symbol.size() > 4 &&
+            info.symbol.compare(info.symbol.size() - 4, 4, "USDC") == 0) {
+            (*slots)[info.symbol.substr(0, info.symbol.size() - 4)] =
+                it->second;
+        } else {
+            (*slots)[info.symbol] = it->second;
+        }
     }
     return slots;
 }
@@ -181,6 +275,237 @@ void MarketData::MarketDataStreams::send_polymarket_book_message(
             return;
         }
     }
+}
+
+void MarketData::MarketDataStreams::resubscribe_lighter_order_book(
+    const std::string &symbol, long long market_id) {
+    const std::string channel = "order_book/" + std::to_string(market_id);
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    for (auto &stream_meta : streams) {
+        if (stream_meta.stream_type != WsStreamConstants::LOB_STREAM_TYPE)
+            continue;
+        const bool carries_symbol = std::any_of(
+            stream_meta.stream_infos.begin(), stream_meta.stream_infos.end(),
+            [&](const StreamInfo &info) {
+                return info.exchange_name == "lighter" && info.symbol == symbol;
+            });
+        if (!carries_symbol) continue;
+        if (stream_meta.stream->is_disconnected()) return;
+        stream_meta.stream->send_message(
+            WsStream::lighter_subscribe_message("unsubscribe", channel));
+        stream_meta.stream->send_message(
+            WsStream::lighter_subscribe_message("subscribe", channel));
+        return;
+    }
+}
+
+void MarketData::MarketDataStreams::consume_lighter_lob_message(
+    const MarketDataMsg &msg, simdjson::dom::parser &parser,
+    std::unordered_map<long long, LighterBookStream> &books) {
+    auto parsed = LighterBookMessage::parse(msg.msg, parser);
+    if (!parsed) return;
+    const long long received_ms = now_ms();
+
+    auto &stream = books[parsed->market_id];
+    if (stream.symbol.empty()) {
+        const auto market = LighterDirect::LighterMarkets::instance().by_market_id(
+            parsed->market_id);
+        if (!market) return;
+        stream.symbol = market->symbol;
+        stream.depth_key = Core::Utils::get_symbol_exchange_market_key(
+            stream.symbol, msg.exchange_name, msg.market_type);
+    }
+
+    auto request_snapshot = [&]() {
+        if (received_ms - stream.last_resubscribe_ms <
+            LIGHTER_RESUBSCRIBE_MIN_INTERVAL_MS)
+            return;
+        stream.last_resubscribe_ms = received_ms;
+        resubscribe_lighter_order_book(stream.symbol, parsed->market_id);
+    };
+
+    const auto result = stream.book.apply(*parsed);
+    using Result = LighterOrderBook::ApplyResult;
+    if (result == Result::NOT_READY) {
+        if (received_ms - stream.last_resubscribe_ms > LIGHTER_SNAPSHOT_WAIT_MS)
+            request_snapshot();
+        return;
+    }
+    if (result == Result::GAP) {
+        DepthHistory::instance().mark_invalid(stream.depth_key, received_ms);
+        emit_lighter_out_of_sync(stream.symbol, msg.exchange_name,
+                                 msg.market_type, "seq_gap");
+        request_snapshot();
+        return;
+    }
+    if (result == Result::CROSSED) {
+        if (++stream.crossed_streak >= LIGHTER_MAX_CROSSED_UPDATES) {
+            stream.book.reset();
+            stream.crossed_streak = 0;
+            DepthHistory::instance().mark_invalid(stream.depth_key,
+                                                  received_ms);
+            emit_lighter_out_of_sync(stream.symbol, msg.exchange_name,
+                                     msg.market_type, "crossed_book");
+            request_snapshot();
+            return;
+        }
+    } else {
+        stream.crossed_streak = 0;
+    }
+
+    DepthHistory::instance().publish(
+        stream.depth_key, stream.book.top(DepthHistory::MAX_LEVELS, received_ms,
+                                          parsed->exchange_ms));
+
+    auto &recorder = DataRecorder::getInstance();
+    if (!recorder.is_enabled()) return;
+    std::string line;
+    if (result == Result::SNAPSHOT_APPLIED ||
+        (result == Result::CROSSED &&
+         parsed->kind == LighterBookMessage::Kind::SNAPSHOT)) {
+        line.reserve(64 + 40 * (parsed->bids.size() + parsed->asks.size()));
+        line += "{\"type\":\"full_refresh\",\"s\":\"" + stream.symbol +
+                "\",\"E\":";
+        append_number(line, parsed->exchange_ms);
+        line += ",\"u\":";
+        append_number(line, parsed->nonce);
+        line += ",\"book\":{\"bids\":";
+        append_object_levels(line, parsed->bids);
+        line += ",\"asks\":";
+        append_object_levels(line, parsed->asks);
+        line += "}}";
+        recorder.record_with_symbol("lob_snapshot", msg.exchange_name,
+                                    msg.market_type, stream.symbol, line);
+        return;
+    }
+    line.reserve(128 + 32 * (parsed->bids.size() + parsed->asks.size()));
+    line += "{\"e\":\"depthUpdate\",\"E\":";
+    append_number(line, parsed->exchange_ms);
+    line += ",\"T\":";
+    append_number(line, parsed->exchange_ms);
+    line += ",\"s\":\"" + stream.symbol + "\",\"U\":";
+    append_number(line, parsed->begin_nonce + 1);
+    line += ",\"u\":";
+    append_number(line, parsed->nonce);
+    line += ",\"pu\":";
+    append_number(line, parsed->begin_nonce);
+    line += ",\"b\":";
+    append_pair_levels(line, parsed->bids);
+    line += ",\"a\":";
+    append_pair_levels(line, parsed->asks);
+    line += '}';
+    recorder.record_with_symbol("lob_l2_update", msg.exchange_name,
+                                msg.market_type, stream.symbol, line);
+}
+
+// {"channel":"trade:1","type":"update/trade","trades":[{"trade_id","price",
+//   "size","timestamp","is_maker_ask",...}],"liquidation_trades":[...]}.
+// The subscribed/trade snapshot replays history and is skipped.
+void MarketData::MarketDataStreams::consume_lighter_trade_message(
+    const MarketDataMsg &msg, simdjson::dom::element doc,
+    std::unordered_map<long long, std::string> &symbols_by_market_id,
+    std::unordered_map<long long, long long> &last_price_emit_ms) {
+    std::string_view type, channel;
+    if (doc["type"].get(type) != simdjson::SUCCESS || type != "update/trade" ||
+        doc["channel"].get(channel) != simdjson::SUCCESS)
+        return;
+    const auto colon = channel.find(':');
+    if (colon == std::string_view::npos) return;
+    long long market_id = -1;
+    const auto id = channel.substr(colon + 1);
+    if (std::from_chars(id.data(), id.data() + id.size(), market_id).ec !=
+        std::errc{})
+        return;
+
+    auto symbol_it = symbols_by_market_id.find(market_id);
+    if (symbol_it == symbols_by_market_id.end()) {
+        const auto market =
+            LighterDirect::LighterMarkets::instance().by_market_id(market_id);
+        if (!market) return;
+        symbol_it = symbols_by_market_id.emplace(market_id, market->symbol).first;
+    }
+    const std::string &symbol = symbol_it->second;
+
+    simdjson::dom::array trades;
+    if (doc["trades"].get(trades) != simdjson::SUCCESS) return;
+    const long long parsed_ms = now_ms();
+    auto &recorder = DataRecorder::getInstance();
+    double last_price = 0;
+    long long last_ts = 0;
+
+    for (auto item : trades) {
+        std::string_view price_sv, size_sv;
+        int64_t ts = 0, trade_id = 0;
+        bool is_maker_ask = false;
+        if (item["price"].get(price_sv) != simdjson::SUCCESS ||
+            item["size"].get(size_sv) != simdjson::SUCCESS ||
+            item["timestamp"].get(ts) != simdjson::SUCCESS ||
+            item["is_maker_ask"].get(is_maker_ask) != simdjson::SUCCESS)
+            continue;
+        if (item["trade_id"].get(trade_id) != simdjson::SUCCESS) trade_id = 0;
+
+        NormalizedParsedTrade trade;
+        trade.symbol = symbol;
+        trade.exchange_name = msg.exchange_name;
+        trade.market_type = msg.market_type;
+        trade.price = sv_to_double(price_sv);
+        trade.quantity = sv_to_double(size_sv);
+        trade.timestamp = ts;
+        trade.parsed_timestamp = parsed_ms;
+        trade.latency_ms = parsed_ms - ts;
+        // A resting ask was hit: the buyer took liquidity.
+        trade.is_buyer_maker = !is_maker_ask;
+        trade.trade_id = std::to_string(trade_id);
+        if (trade.price <= 0.0 || trade.quantity <= 0.0) continue;
+
+        if (recorder.is_enabled()) {
+            std::string line;
+            line.reserve(128);
+            line += "{\"t\":";
+            append_number(line, static_cast<long long>(trade_id));
+            line += ",\"p\":\"";
+            line.append(price_sv);
+            line += "\",\"q\":\"";
+            line.append(size_sv);
+            line += "\",\"T\":";
+            append_number(line, static_cast<long long>(ts));
+            line += trade.is_buyer_maker ? ",\"m\":true" : ",\"m\":false";
+            line += ",\"s\":\"" + symbol + "\"}";
+            recorder.record_with_symbol(WsStreamConstants::TRADE_STREAM_TYPE,
+                                        msg.exchange_name, msg.market_type,
+                                        symbol, line);
+        }
+
+        BarAggregator::getInstance().add_trade(trade, true);
+
+        MarketEvent event;
+        event.type = MarketEvent::TRADE;
+        event.trade = {trade.symbol,         msg.exchange_name, msg.market_type,
+                       trade.price,          trade.quantity,
+                       trade.is_buyer_maker, trade.timestamp};
+        StateMachineDispatcher::get_instance().enqueue(MarketEvent(event));
+        if (is_ran_from_live_infra) live_event_callback_(std::move(event));
+
+        last_price = trade.price;
+        last_ts = ts;
+        ++trade_msgs_count;
+        trade_total_latency_to_parse_ms += trade.latency_ms;
+    }
+
+    // Lighter has no miniTicker; last trade price marks paper positions,
+    // throttled to the miniTicker's 1/s cadence.
+    if (!is_ran_from_live_infra || last_price <= 0) return;
+    auto &last_emit = last_price_emit_ms[market_id];
+    if (parsed_ms - last_emit < LIGHTER_PRICE_UPDATE_INTERVAL_MS) return;
+    last_emit = parsed_ms;
+    Core::MarketEvent market_event;
+    market_event.type = Core::MarketEventType::PRICE_UPDATE;
+    market_event.symbol = symbol;
+    market_event.price = last_price;
+    market_event.event_time = last_ts;
+    market_event.exchange_name = msg.exchange_name;
+    market_event.market_type = msg.market_type;
+    Core::Engine::getInstance().process_market_event(market_event);
 }
 
 void MarketData::MarketDataStreams::handle_ohlcv_message(
@@ -474,6 +799,8 @@ MarketData::MarketDataStreams::parse_binance_lob_message(
         update.timestamp = timestamp;
         update.sequence_start = sequence_start;
         update.sequence_end = sequence_end;
+        int64_t prev_end = 0;
+        if (root["pu"].get_int64().get(prev_end) == simdjson::SUCCESS) update.prev_sequence_end = prev_end;
 
         if (root["a"].is_array()) {
             for (auto ask : root["a"].get_array()) {
@@ -943,6 +1270,7 @@ void MarketData::MarketDataStreams::parse_polygon_ohlcv_message(
 void MarketData::MarketDataStreams::lob_msg_consumer_thread() {
     thread_local simdjson::dom::parser parser;
     std::unordered_map<std::string, Core::OrderBook> gateio_lob_map;
+    std::unordered_map<long long, LighterBookStream> lighter_books;
     while (true) {
         MarketDataMsg msg;
         if (lob_queue.wait_dequeue_timed(msg,
@@ -988,6 +1316,10 @@ void MarketData::MarketDataStreams::lob_msg_consumer_thread() {
                     event.l2_update = std::move(l2);
                     has_event = true;
                 }
+            } else if (msg.exchange_name == "lighter") {
+                // Lighter depth feeds paper fills only (DepthHistory); the
+                // engine order book and state machines never see it.
+                consume_lighter_lob_message(msg, parser, lighter_books);
             } else if (msg.exchange_name == "bybit") {
             } else if (msg.exchange_name == "bitget") {
             } else if (msg.exchange_name == "polygon") {
@@ -1040,6 +1372,8 @@ void MarketData::MarketDataStreams::ohlcv_msg_consumer_thread() {
 
 void MarketData::MarketDataStreams::trade_msg_consumer_thread() {
     thread_local simdjson::dom::parser parser;
+    std::unordered_map<long long, std::string> lighter_symbols;
+    std::unordered_map<long long, long long> lighter_price_emit_ms;
 
     while (true) {
         MarketDataMsg trade_msg;
@@ -1064,6 +1398,11 @@ void MarketData::MarketDataStreams::trade_msg_consumer_thread() {
                         continue;
                     }
                     trade_data = doc.value();
+                } else if (trade_msg.exchange_name == "lighter") {
+                    consume_lighter_trade_message(trade_msg, doc.value(),
+                                                  lighter_symbols,
+                                                  lighter_price_emit_ms);
+                    continue;
                 } else {
                     trade_data = doc["data"];
                 }
@@ -1093,7 +1432,9 @@ void MarketData::MarketDataStreams::trade_msg_consumer_thread() {
                 event.trade = {trade.symbol, trade_msg.exchange_name,
                                trade_msg.market_type, trade.price,
                                trade.quantity, trade.is_buyer_maker,
-                               trade.timestamp};
+                               trade.timestamp,
+                               std::strtoll(trade.trade_id.c_str(), nullptr, 10),
+                               trade.trade_time_ms};
 
                 StateMachineDispatcher::get_instance().enqueue(
                     MarketEvent(event));
@@ -1171,8 +1512,48 @@ void MarketData::MarketDataStreams::book_ticker_msg_consumer_thread() {
 
             double bid_price = 0, bid_qty = 0, ask_price = 0, ask_qty = 0;
             int64_t event_ts_ms = 0;
+            std::string normalized_record;
 
-            if (meta.exchange_name == "hyperliquid") {
+            if (meta.exchange_name == "lighter") {
+                // {"channel":"ticker:1","nonce":..,"ticker":{"s":"BTC",
+                //   "a":{"price","size"},"b":{...}},"timestamp":ms}
+                simdjson::dom::element ticker;
+                std::string_view bid_sv, bid_qty_sv, ask_sv, ask_qty_sv;
+                if (doc["ticker"].get(ticker) != simdjson::SUCCESS ||
+                    ticker["b"]["price"].get(bid_sv) != simdjson::SUCCESS ||
+                    ticker["b"]["size"].get(bid_qty_sv) != simdjson::SUCCESS ||
+                    ticker["a"]["price"].get(ask_sv) != simdjson::SUCCESS ||
+                    ticker["a"]["size"].get(ask_qty_sv) != simdjson::SUCCESS)
+                    continue;
+                bid_price = sv_to_double(bid_sv);
+                bid_qty = sv_to_double(bid_qty_sv);
+                ask_price = sv_to_double(ask_sv);
+                ask_qty = sv_to_double(ask_qty_sv);
+                if (doc["timestamp"].get(event_ts_ms) != simdjson::SUCCESS)
+                    event_ts_ms = now_ms();
+                if (DataRecorder::getInstance().is_enabled()) {
+                    int64_t nonce = 0;
+                    if (doc["nonce"].get(nonce) != simdjson::SUCCESS) nonce = 0;
+                    const auto ts = static_cast<long long>(event_ts_ms);
+                    auto &line = normalized_record;
+                    line.reserve(192);
+                    line += "{\"u\":";
+                    append_number(line, static_cast<long long>(nonce));
+                    line += ",\"s\":\"" + meta.symbol + "\",\"b\":\"";
+                    line.append(bid_sv);
+                    line += "\",\"B\":\"";
+                    line.append(bid_qty_sv);
+                    line += "\",\"a\":\"";
+                    line.append(ask_sv);
+                    line += "\",\"A\":\"";
+                    line.append(ask_qty_sv);
+                    line += "\",\"T\":";
+                    append_number(line, ts);
+                    line += ",\"E\":";
+                    append_number(line, ts);
+                    line += '}';
+                }
+            } else if (meta.exchange_name == "hyperliquid") {
                 // HL bbo: {"channel":"bbo","data":{"coin":..,"time":..,
                 //   "bbo":[{px,sz,n}(bid),{px,sz,n}(ask)]}} — levels may be null.
                 simdjson::dom::element data;
@@ -1224,7 +1605,8 @@ void MarketData::MarketDataStreams::book_ticker_msg_consumer_thread() {
             DataRecorder::getInstance().record_with_symbol(
                 WsStreamConstants::BOOK_TICKER_STREAM_TYPE,
                 meta.exchange_name, meta.market_type, meta.symbol,
-                std::string(local_buf, local_len));
+                normalized_record.empty() ? std::string(local_buf, local_len)
+                                          : normalized_record);
 
             MarketEvent event;
             event.type = MarketEvent::BBA;

@@ -80,6 +80,9 @@ class WsStream {
     void send_lob_subscribe_messages();
     void send_trade_subscribe_messages();
     void send_book_ticker_subscribe_messages();
+    void send_lighter_subscribe_messages(const std::string& channel);
+    static std::string lighter_subscribe_message(const std::string& type,
+                                                 const std::string& channel);
     bool is_disconnected();
     std::chrono::steady_clock::time_point get_last_msg_received();
     // Hold the staleness clock while a venue is legitimately silent (e.g. US

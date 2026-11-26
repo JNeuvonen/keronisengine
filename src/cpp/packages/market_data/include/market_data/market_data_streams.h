@@ -69,6 +69,9 @@ using BbaSymbolSlots =
 
 // --- End BBA pipeline ---
 
+// Book-builder state for one Lighter order_book channel (defined in the .cpp).
+struct LighterBookStream;
+
 struct MarketDataMsg {
     std::string exchange_name;
     std::string market_type;
@@ -105,6 +108,10 @@ class MarketDataStreams {
                         const std::vector<StreamsConfig> &configs);
     void send_polymarket_message(const std::string &msg);
     void send_polymarket_book_message(const std::string &msg);
+    // Unsubscribe + subscribe on the open Lighter order_book connection that
+    // carries `symbol`; the venue answers with a fresh snapshot.
+    void resubscribe_lighter_order_book(const std::string &symbol,
+                                        long long market_id);
 
     // Rebuilt once per health_check_loop pass (5s). Empty until the first
     // pass, which only runs after start_streams has built every stream.
@@ -196,6 +203,13 @@ class MarketDataStreams {
         const std::vector<StreamInfo> &stream_infos);
     void open_stream_locked(const std::string &stream_type,
                             const StreamsConfig &config);
+    void consume_lighter_lob_message(
+        const MarketDataMsg &msg, simdjson::dom::parser &parser,
+        std::unordered_map<long long, LighterBookStream> &books);
+    void consume_lighter_trade_message(
+        const MarketDataMsg &msg, simdjson::dom::element doc,
+        std::unordered_map<long long, std::string> &symbols_by_market_id,
+        std::unordered_map<long long, long long> &last_price_emit_ms);
     MarketDataStreams() noexcept;
     ~MarketDataStreams() noexcept;
 

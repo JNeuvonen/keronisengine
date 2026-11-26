@@ -5,6 +5,8 @@
 #include "common_types/strategy.h"
 #include "common_types/trading_log.h"
 #include "concurrent_queue_include_helper.h"
+#include "live_infra/paper_exchange.h"
+#include "live_infra/quote_holds.h"
 #include "live_infra/strategy_command_store.h"
 #include "live_infra/types.h"
 #include "market_data/market_data_stream_manager.h"
@@ -53,7 +55,11 @@ class StateUpdater {
     StateUpdater();
     ~StateUpdater();
 
-    std::optional<nlohmann::json> create_order(const Core::Order &order);
+    std::optional<nlohmann::json> create_order(const Core::Order &order,
+                                               int *http_status = nullptr);
+    // A venue-accepted order must show up on the user-data stream; one that
+    // does not within 90s means the account's stream stopped delivering.
+    void note_order_accepted_by_venue(long long account_id);
     std::optional<nlohmann::json> cancel_order(const Core::Order &order);
     std::vector<Core::PolymarketBulkCancelResult> cancel_polymarket_orders_bulk(
         const std::vector<std::string> &order_ids, long long account_id);
@@ -76,6 +82,12 @@ class StateUpdater {
 
     bool is_polymarket_direct_signing_enabled() const;
     bool is_paper_strategy(int strategy_id) const;
+    // Set from the SIGTERM handler once the main loop runs: the loop exits and
+    // shutdown pulls quotes first. Before that, SIGTERM exits at once.
+    static inline std::atomic<bool> main_loop_running{false};
+    static inline std::atomic<bool> termination_requested{false};
+    // The venue paper strategies' orders go to instead of an exchange.
+    PaperExchange &paper_exchange() { return *paper_exchange_; }
 
     // Aster bulk order routing
     bool is_aster_direct_signing_enabled() const;
@@ -107,6 +119,10 @@ class StateUpdater {
 
     bool sync_state_to_disk();
     void handle_invidual_order_not_found(Core::Order order);
+    // True on a venue "not found" at least ORDER_NOT_FOUND_CONFIRM_MS after
+    // the first one for the same order; the first only records its time.
+    bool confirm_order_not_found(const std::string &order_key);
+    void forget_order_not_found(const std::string &order_key);
     void recover_state_from_disk();
     void run_extensive_exchange_health_checks();
     void initialize_exchange_info();
@@ -213,6 +229,9 @@ class StateUpdater {
     // Grows when the strategy sync loads a paper strategy; ticker order
     // paths read it from strategy threads.
     std::unordered_set<int> paper_strategy_ids;
+    // Paper strategies trading a venue whose fills walk recorded depth
+    // (Lighter), with the ack-to-fill latency each uses. Shares the mutex.
+    std::unordered_map<int, long long> paper_fill_latency_ms_by_strategy;
     mutable std::shared_mutex paper_strategy_ids_mutex;
     std::set<std::string> paper_exchange_infos_loaded;
     // Each strategy row as last handed to the engine, with the fingerprint it
@@ -233,7 +252,7 @@ class StateUpdater {
     std::chrono::steady_clock::time_point last_strategy_rows_poll_time{
         std::chrono::steady_clock::now()};
     // Applies added, changed and removed strategy rows while trading; see
-    // LIVE_INFRA.md "Live strategy sync".
+    // Live strategy sync from PostgreSQL.
     void poll_strategy_rows();
     struct StrategyRowState {
         std::string fingerprint;
@@ -254,7 +273,7 @@ class StateUpdater {
     void write_paper_account_records(
         const std::vector<StrategyConfig> &strategies);
     static std::filesystem::path paper_strategy_modes_path();
-    // Operator commands for discretionary strategies; see LIVE_INFRA.md
+    // Operator commands for discretionary strategies.
     // "Strategy commands".
     std::shared_ptr<StrategyCommandStore> strategy_command_store;
     std::chrono::steady_clock::time_point last_strategy_command_flush_time{};
@@ -263,26 +282,50 @@ class StateUpdater {
     // Accounts that paper strategies route to and no configured account backs;
     // their NAV is computed from those strategies' books.
     std::unordered_set<long long> paper_only_account_ids;
-    std::unordered_set<unsigned long long> paper_orders_checked;
-    // Lowest and highest trade price per exchange|market|symbol since the
-    // last paper fill poll: a print through a resting limit fills it.
-    std::mutex paper_trade_range_mutex;
-    std::unordered_map<std::string, std::pair<double, double>> paper_trade_range;
     std::unordered_map<long long, std::unordered_set<std::string>>
         paper_reported_symbols;
-    std::chrono::steady_clock::time_point last_paper_fills_poll_time{
-        std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point last_paper_nav_poll_time{
         std::chrono::steady_clock::now() - std::chrono::seconds(60)};
-    void poll_paper_fills();
+    PaperVenue make_paper_venue();
+    std::chrono::steady_clock::time_point last_paper_exchange_liveness_check{
+        std::chrono::steady_clock::now()};
+    void poll_paper_exchange_liveness();
     void poll_paper_nav();
+    // Reads QuoteHolds every second off the loop. A read that fails or has
+    // not finished in 15s pulls every real-money strategy.
+    void poll_quote_holds();
+    void apply_quote_holds(const QuoteHolds::Pulls& pulls, bool guard_fresh);
+    // Pulls every strategy's quotes and waits up to `timeout` for the cancels
+    // to be acked; exits are left resting.
+    void pull_quotes_for_shutdown(std::chrono::milliseconds timeout);
+    std::shared_ptr<QuoteHolds> quote_holds_;
+    std::mutex quote_holds_mutex_;
+    QuoteHolds::Pulls last_quote_pulls_;
+    std::atomic<bool> quote_holds_in_flight_{false};
+    std::atomic<bool> quote_holds_failing_{false};
+    std::atomic<bool> quotes_shutdown_{false};
+    std::atomic<std::chrono::steady_clock::time_point> last_quote_holds_ok_{
+        std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point last_quote_holds_poll_{};
     void poll_discretionary_accounts(bool force = false);
     std::vector<Core::DiscretionaryAccount> discretionary_accounts_;
     bool discretionary_accounts_active_ = false;
     std::chrono::steady_clock::time_point last_discretionary_accounts_poll_{};
-    // False when a strategy switched between paper and live while it still
-    // has orders or trades in the saved state.
+    // Accounts with account_type 'paper' or routed by a paper strategy; a
+    // trade on one is written is_paper_trade. Read from the DB writer thread.
+    std::unordered_set<long long> paper_trade_account_ids;
+    mutable std::shared_mutex paper_trade_account_ids_mutex;
+    bool is_paper_trade_account(long long account_id) const;
+    // False when a strategy switched from live to paper while it still has
+    // orders or trades in the saved state. A switch from paper to live closes
+    // that strategy's saved paper trades at the startup price instead.
     bool check_paper_mode_switches();
+    std::unordered_set<int> paper_to_live_strategy_ids;
+    std::vector<Core::Trade> paper_switch_closed_trades;
+    nlohmann::json pending_paper_modes = nlohmann::json::object();
+    // Written after the restore so a crash before it repeats the switch.
+    void commit_paper_modes();
+
 
     void account_info_log_callback(const std::string &log);
     void account_error_log_callback(const std::string &log);
@@ -296,7 +339,7 @@ class StateUpdater {
     // Observability layer — UPSERTs the 4 state-backed tables
     // (engine_health, strategy_health, state_machine_health) and inserts
     // metric rows into engine_metric, all in one transaction per tick.
-    // See agentic_system/skills/ENGINE_DIAGNOSTICS.md.
+    // Periodic observability heartbeat emission.
     void observability_callback(const Core::ObservabilityBatch &batch);
     void init_accounts();
     void create_account_db_records();
@@ -387,6 +430,12 @@ class StateUpdater {
     Trading::Account *get_account(long long account_id);
     std::unordered_map<long long, Trading::Account> accounts;
     std::vector<std::unique_ptr<WsStream>> private_streams;
+    // Set by the proxy's first heartbeat; until then silence is not staleness.
+    std::atomic<bool> user_data_heartbeat_seen{false};
+    std::mutex stream_delivery_mutex;
+    std::unordered_map<long long, long long> stream_event_pending_since_ms;
+    std::unordered_map<long long, long long> stream_restart_requested_ms;
+    void check_private_stream_delivery();
     std::unique_ptr<SqliteCache<long long>>
         symbol_last_closed_trade_times_cache;
     std::unique_ptr<SqliteCache<int>> unacked_orders_failed_to_retrieve_cache;
@@ -401,6 +450,8 @@ class StateUpdater {
     std::unique_ptr<SqliteCache<long long>> borrowable_inventories_sqlite_cache;
     std::vector<std::pair<std::string, long long>> pending_cancel_checks;
     std::mutex pending_cancel_checks_mutex;
+    std::mutex order_not_found_mutex;
+    std::unordered_map<std::string, long long> first_order_not_found_ms;
     bool init_shutdown = false;
 
     std::chrono::steady_clock::time_point last_polymarket_events_poll_time{
@@ -441,5 +492,10 @@ class StateUpdater {
 
     static constexpr auto POLYMARKET_CANCEL_RESOLUTION_DELAY_MS =
         std::chrono::milliseconds(1000);
+
+    // Last member: its worker calls back into the members above, so it is
+    // destroyed (and its worker joined) first.
+    std::unique_ptr<PaperExchange> paper_exchange_ =
+        std::make_unique<PaperExchange>(make_paper_venue());
 };
 }  // namespace Live

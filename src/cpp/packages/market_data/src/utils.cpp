@@ -13,6 +13,7 @@
 #include "market_data/ohlcv_bar_meta.h"
 #include "market_data/stream_info.h"
 #include "market_data/trade_streams.h"
+#include "lighter_markets.h"
 #include "ws_stream.h"
 
 static std::string get_stream_base_url(const std::string& exchange_name,
@@ -85,6 +86,10 @@ static std::string get_stream_base_url(const std::string& exchange_name,
             return EnvUtils::env_or("HYPERLIQUID_PUBLIC_WS_BASE_URL",
                                     "wss://api.hyperliquid.xyz/ws");
         }
+    }
+
+    if (exchange_name == "lighter" && market_type == "swap") {
+        return LighterDirect::LighterMarkets::public_ws_url();
     }
 
     return "";

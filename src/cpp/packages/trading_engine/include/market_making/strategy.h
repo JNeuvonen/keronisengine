@@ -37,6 +37,13 @@ constexpr const char* WARMUP = "WARMUP";
 constexpr const char* SIGNAL_EXPIRED = "SIGNAL_EXPIRED";
 }  // namespace StrategyPauseReason
 
+// Why set_quotes_pulled changed; metadata.reason of QUOTES_PULLED / QUOTES_RESUMED.
+namespace QuotesPullReason {
+constexpr const char* PULL_SIGNAL = "PULL_SIGNAL";
+constexpr const char* GUARD_STALE = "GUARD_STALE";
+constexpr const char* SHUTDOWN = "SHUTDOWN";
+}  // namespace QuotesPullReason
+
 // Forward declarations
 class Engine;
 class Order;
@@ -241,6 +248,17 @@ class Strategy {
     // `extra_metadata` is merged into the emit's metadata JSON (e.g. signal_id).
     void set_stop_making_markets(bool should_stop, const char* reason,
                                  nlohmann::json extra_metadata = {});
+
+    // While set, resting entry orders are refused and Engine::sweep_pulled_quotes
+    // cancels the ones out. Closes (take-profits included) and IOC / FOK /
+    // market entries still go out. Set only through set_quotes_pulled, which
+    // logs QUOTES_PULLED / QUOTES_RESUMED; `reason` is a QuotesPullReason.
+    std::atomic<bool> quotes_pulled{false};
+    void set_quotes_pulled(bool pulled, const char* reason);
+    static bool is_quote(OrderType type, bool is_trade_close_order) {
+        return !is_trade_close_order &&
+               (type == OrderType::LIMIT || type == OrderType::LIMIT_MAKER);
+    }
 
     std::vector<MintContractsRequest> get_mint_contracts(Engine& engine);
 

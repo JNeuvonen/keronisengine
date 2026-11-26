@@ -146,24 +146,30 @@ MarketData::OhlcvDatasetTick::from_cpp_proxy_res(
         return {};
     }
 
+    // ccxt returns Binance kline fields as strings or as JSON numbers, by version.
+    const auto num = [](const nlohmann::json& v) {
+        return v.is_string() ? std::stod(v.get<std::string>()) : v.get<double>();
+    };
+    const auto integer = [](const nlohmann::json& v) {
+        return v.is_string() ? std::stoll(v.get<std::string>())
+                             : v.get<long long>();
+    };
     std::vector<OhlcvDatasetTick> ticks;
     long long now_ms = DatetimeUtils::get_current_time_ms();
     for (const auto& tick : json.at("data")) {
         OhlcvDatasetTick ohlcv_tick;
 
-        ohlcv_tick.kline_open_time = std::stoll(tick[0].get<std::string>());
-        ohlcv_tick.close_price = std::stod(tick[4].get<std::string>());
-        ohlcv_tick.open_price = std::stod(tick[1].get<std::string>());
-        ohlcv_tick.high_price = std::stod(tick[2].get<std::string>());
-        ohlcv_tick.low_price = std::stod(tick[3].get<std::string>());
-        ohlcv_tick.volume = std::stod(tick[5].get<std::string>());
+        ohlcv_tick.kline_open_time = integer(tick[0]);
+        ohlcv_tick.close_price = num(tick[4]);
+        ohlcv_tick.open_price = num(tick[1]);
+        ohlcv_tick.high_price = num(tick[2]);
+        ohlcv_tick.low_price = num(tick[3]);
+        ohlcv_tick.volume = num(tick[5]);
         ohlcv_tick.kline_close_time = ohlcv_tick.kline_open_time + interval_ms;
-        ohlcv_tick.quote_asset_volume = std::stod(tick[7].get<std::string>());
-        ohlcv_tick.number_of_trades = std::stol(tick[8].get<std::string>());
-        ohlcv_tick.taker_buy_base_volume =
-            std::stod(tick[9].get<std::string>());
-        ohlcv_tick.taker_buy_quote_volume =
-            std::stod(tick[10].get<std::string>());
+        ohlcv_tick.quote_asset_volume = num(tick[7]);
+        ohlcv_tick.number_of_trades = integer(tick[8]);
+        ohlcv_tick.taker_buy_base_volume = num(tick[9]);
+        ohlcv_tick.taker_buy_quote_volume = num(tick[10]);
         ohlcv_tick.is_closed = true;
 
         if (ohlcv_tick.kline_close_time > now_ms) {

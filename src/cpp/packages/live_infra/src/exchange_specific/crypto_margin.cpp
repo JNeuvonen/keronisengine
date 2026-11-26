@@ -211,21 +211,111 @@ void Live::StateUpdater::close_nontracked_inventory(
             inventory.symbol, inventory.exchange_name, inventory.market_type,
             inventory.account_id);
 
-        Core::Engine::getInstance().create_system_log(
-            inventory.symbol, Core::LOG_LEVEL_INFO,
-            "Closing nontracked inventory for: " + key,
-            Core::TRADING_LOG_EVENT_TYPE_INVENTORY_CLOSE_ORDER_CREATED,
-            inventory.to_json(), -1);
-
         const auto &stall_order_time =
             this->nontracked_positions_close_times_cache->get(key);
         const auto time_now_ms = DatetimeUtils::get_current_time_ms();
 
         if (stall_order_time.has_value()) {
-            if (time_now_ms - stall_order_time.value() < 28800000) {  // 8h
+            if (time_now_ms - stall_order_time.value() < 2 * 3600 * 1000) {
                 continue;
             }
         }
+
+        // The candidate comes from a check up to minutes old; a fill booked
+        // or an order sent since must not be closed against.
+        bool order_in_flight = false;
+        for (const auto &order : Core::Engine::getInstance().get_orders()) {
+            if (order.account_id == inventory.account_id &&
+                order.symbol == inventory.symbol &&
+                (!order.is_order_creation_acknowledged ||
+                 time_now_ms - order.create_timestamp < 60000)) {
+                order_in_flight = true;
+                break;
+            }
+        }
+        if (order_in_flight) {
+            continue;
+        }
+
+        auto *account = this->get_account(inventory.account_id);
+        if (account == nullptr) {
+            continue;
+        }
+        const auto fresh_inventory = account->get_inventory_state();
+        if (!fresh_inventory.has_value()) {
+            continue;
+        }
+        Core::Engine::getInstance().update_inventory_and_quote_assets(
+            inventory.exchange_name, inventory.market_type,
+            inventory.account_id, fresh_inventory->second,
+            fresh_inventory->first);
+        auto account_state = Core::Engine::getInstance().get_full_account_state(
+            inventory.account_id);
+        for (const auto &trade : Core::Engine::getInstance().get_held_trades()) {
+            if (trade.account_id == inventory.account_id) {
+                account_state.trades.push_back(trade);
+            }
+        }
+        std::erase_if(account_state.trades, [&](const Core::Trade &t) {
+            return this->is_paper_strategy(t.strategy_id);
+        });
+        double fresh_delta;
+        if (inventory.position_side.has_value()) {
+            fresh_delta =
+                (Core::Utils::get_account_symbol_inventory_by_side(
+                     inventory.symbol, inventory.exchange_name,
+                     inventory.market_type, inventory.account_id,
+                     account_state.inventories, *inventory.position_side) -
+                 Core::Utils::get_acc_symbol_trade_open_quantity_by_side(
+                     account_state.trades, inventory.symbol,
+                     inventory.exchange_name, inventory.market_type,
+                     inventory.account_id, *inventory.position_side))
+                    .toDouble();
+        } else {
+            fresh_delta =
+                (Core::Utils::get_account_symbol_inventory(
+                     inventory.symbol, inventory.exchange_name,
+                     inventory.market_type, inventory.account_id,
+                     account_state.inventories) -
+                 Core::Utils::get_acc_symbol_trade_open_quantity(
+                     account_state.trades, inventory.symbol,
+                     inventory.exchange_name, inventory.market_type,
+                     inventory.account_id))
+                    .toDouble();
+        }
+        const double checked_delta = inventory.quantity.toDouble();
+        const bool same_direction = inventory.position_side.has_value()
+                                        ? fresh_delta > 0
+                                        : (fresh_delta > 0) == (checked_delta > 0);
+        const auto close_price = Core::Engine::getInstance().get_price(
+            inventory.symbol, inventory.exchange_name, inventory.market_type);
+        if (!same_direction || !close_price.has_value()) {
+            continue;
+        }
+        const double close_magnitude =
+            std::min(std::abs(fresh_delta), std::abs(checked_delta));
+        const double close_notional = close_magnitude * close_price.value();
+        nlohmann::json close_meta = inventory.to_json();
+        close_meta["fresh_quantity"] = fresh_delta;
+        close_meta["close_quantity"] = close_magnitude;
+        close_meta["close_notional"] = close_notional;
+        if (close_notional < 5) {
+            continue;
+        }
+        if (close_notional > 500) {
+            Core::Engine::getInstance().create_system_log(
+                inventory.symbol, Core::LOG_LEVEL_ERROR,
+                "Untracked inventory too large to close automatically: " + key,
+                Core::TRADING_LOG_EVENT_TYPE_HUMAN_INTERVENTION_REQUIRED,
+                close_meta, -1);
+            continue;
+        }
+
+        Core::Engine::getInstance().create_system_log(
+            inventory.symbol, Core::LOG_LEVEL_WARNING,
+            "Closing nontracked inventory for: " + key,
+            Core::TRADING_LOG_EVENT_TYPE_INVENTORY_CLOSE_ORDER_CREATED,
+            close_meta, -1);
         this->nontracked_positions_close_times_cache->insert(
             key, DatetimeUtils::get_current_time_ms());
 
@@ -236,17 +326,12 @@ void Live::StateUpdater::close_nontracked_inventory(
         // and `quantity` carries the legacy signed delta (positive = long
         // excess, negative = short excess) so we keep the old sign-infer
         // behavior for those paths.
-        bool is_long_side_excess_position;
-        double remaining_quantity;
-        if (inventory.position_side.has_value()) {
-            is_long_side_excess_position = inventory.position_side.value() ==
-                                           Core::PositionSide::LONG_SIDE;
-            remaining_quantity = std::abs(inventory.quantity.toDouble());
-        } else {
-            remaining_quantity = inventory.quantity.toDouble();
-            is_long_side_excess_position = remaining_quantity > 0;
-            remaining_quantity = std::abs(remaining_quantity);
-        }
+        const bool is_long_side_excess_position =
+            inventory.position_side.has_value()
+                ? inventory.position_side.value() ==
+                      Core::PositionSide::LONG_SIDE
+                : fresh_delta > 0;
+        double remaining_quantity = close_magnitude;
 
         std::vector<Core::Order> already_sent_orders;
         double quantity_in_book = 0;
@@ -298,7 +383,8 @@ void Live::StateUpdater::close_nontracked_inventory(
                 .side = side,
                 .price = order_price,
                 .prediction = std::nullopt,
-                .quantity = side == Core::OrderSide::SELL
+                .quantity = side == Core::OrderSide::SELL &&
+                                    inventory.market_type == "spot"
                                 ? order_close_qty - (1 / price.value())
                                 : order_close_qty,
                 .exchange_name = inventory.exchange_name,
@@ -308,7 +394,10 @@ void Live::StateUpdater::close_nontracked_inventory(
                     DatetimeUtils::get_current_time_ms() + 60000 * 60,
                 .sizing_coeff_delta = 0,
                 .trade_id = std::nullopt,
-                .reduce_only = false,
+                // Hedge-mode Binance rejects reduceOnly; there the position
+                // side alone keeps the order from opening a position.
+                .reduce_only = inventory.market_type == "swap" &&
+                               !inventory.position_side.has_value(),
                 .timestamp = DatetimeUtils::get_current_time_ms(),
                 .quote_asset = route_to_usdc_pair ? "USDC" : quote_asset,
                 .base_asset = base_asset,

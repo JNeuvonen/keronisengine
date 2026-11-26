@@ -2,6 +2,7 @@
 
 #include <curl/curl.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -13,11 +14,13 @@
 #include "common_types/log_event_types.h"
 #include "crypto/secp256k1_signer.h"
 #include "curl_multi_manager.h"
+#include "datetime_utils.h"
 #include "disk_logging/log.h"
 #include "market_data/utils.h"
 #include "ohlcv_dataset_tick.h"
 #include "rate_limiter.h"
 #include "str_math.h"
+#include "lighter_markets.h"
 
 CcxtProxy::CcxtProxy() {
     const char *base_env = std::getenv("CCXT_PROXY_BASE_URL");
@@ -55,8 +58,9 @@ static bool exchange_writes_disabled() {
     return v;
 }
 
-std::optional<nlohmann::json> CcxtProxy::create_order(
-    const Core::Order &order) {
+std::optional<nlohmann::json> CcxtProxy::create_order(const Core::Order &order,
+                                                     int *http_status) {
+    if (http_status != nullptr) *http_status = -1;
     if (exchange_writes_disabled()) {
         return std::nullopt;
     }
@@ -97,6 +101,7 @@ std::optional<nlohmann::json> CcxtProxy::create_order(
     // wait for the ccxt result so the engine can dispatch on success/failure.
     auto res = http_req(this->base_url + "/create-order", "POST",
                         order.to_ccxt_proxy_format().dump());
+    if (http_status != nullptr) *http_status = res.first;
     if (res.first >= 200 && res.first < 300 && !res.second.empty()) {
         try {
             return nlohmann::json::parse(res.second);
@@ -317,7 +322,18 @@ std::pair<int, std::string> CcxtProxy::http_req(
     for (const auto &header : headers) {
         req.headers.push_back(header);
     }
-    return CurlMultiManager::instance().execute(std::move(req));
+    auto res = CurlMultiManager::instance().execute(std::move(req));
+    if (res.first == 0) {
+        // Proxy unreachable, typically during its restart: one warning a
+        // minute instead of a parse error per call.
+        static std::atomic<long long> last_warned_ms{0};
+        const long long now_ms = DatetimeUtils::get_current_time_ms();
+        if (now_ms - last_warned_ms.exchange(now_ms) > 60000) {
+            LOG_WARNING(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_REQUEST_FAILED,
+                        "proxy unreachable", (nlohmann::json{{"url", url}}));
+        }
+    }
+    return res;
 }
 
 bool CcxtProxy::rate_blocked(const std::string &exchange_name,
@@ -343,6 +359,15 @@ void CcxtProxy::note_rate_limit(const std::string &exchange_name,
 
 std::vector<Core::SymbolExchangeInfo> CcxtProxy::get_exchange_symbols_info(
     const std::string &exchange_name, const std::string &market_type) {
+    if (exchange_name == "lighter") {
+        if (market_type != "swap") return {};
+        auto &markets = LighterDirect::LighterMarkets::instance();
+        markets.refresh();
+        std::vector<Core::SymbolExchangeInfo> infos;
+        for (const auto &market : markets.all())
+            infos.push_back(LighterDirect::LighterMarkets::to_symbol_info(market));
+        return infos;
+    }
     if (rate_blocked(exchange_name, market_type)) return {};
     try {
         auto res = http_req(this->base_url + "/exchange-info?exchange_name=" +
@@ -350,6 +375,7 @@ std::vector<Core::SymbolExchangeInfo> CcxtProxy::get_exchange_symbols_info(
                             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -469,6 +495,7 @@ CcxtProxy::get_inventory_state(const std::string &exchange_name,
             return std::nullopt;
         }
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             LOG_ERROR(
                 Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_REQUEST_FAILED,
@@ -543,6 +570,7 @@ std::vector<Core::OrderResNormalized> CcxtProxy::get_orders_on_symbol(
             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -585,6 +613,7 @@ std::vector<Core::OrderResNormalized> CcxtProxy::get_open_orders_on_symbol(
             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -624,6 +653,7 @@ std::vector<Core::OrderResNormalized> CcxtProxy::get_all_open_orders(
                             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_REQUEST_FAILED,
                       "get_all_open_orders HTTP " + std::to_string(res.first) +
@@ -660,16 +690,14 @@ std::vector<Core::OrderResNormalized> CcxtProxy::get_all_open_orders(
     }
 }
 
-std::optional<Core::OrderResNormalized> CcxtProxy::query_order(
+CcxtProxy::OrderLookup CcxtProxy::lookup_order(
     const std::string &exchange_name, const std::string &market_type,
     const long long &account_id, const std::string &symbol,
     const std::string &client_order_id) {
-    if (rate_blocked(exchange_name, market_type)) return std::nullopt;
+    OrderLookup out;
+    if (client_order_id.empty()) return out;
+    if (rate_blocked(exchange_name, market_type)) return out;
     try {
-        if (client_order_id.empty()) {
-            return std::nullopt;
-        }
-
         auto res = http_req(
             this->base_url + "/query-order?exchange_name=" + exchange_name +
                 "&market_type=" + market_type +
@@ -678,15 +706,17 @@ std::optional<Core::OrderResNormalized> CcxtProxy::query_order(
                 "&client_order_id=" + client_order_id,
             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
-        if (res.first > 299) {
-            return std::nullopt;
+        if (res.first == 404) {
+            out.status = OrderLookup::Status::NOT_FOUND;
+            return out;
         }
+        if (res.first < 200 || res.first > 299) return out;
         auto json = nlohmann::json::parse(res.second);
-        if (!json.contains("data")) {
-            return std::nullopt;
-        }
-        const auto &data = json.at("data");
-        return Core::OrderResNormalized::from_ccxt_user_data_stream_msg(data);
+        if (!json.contains("data") || json.at("data").is_null()) return out;
+        out.order = Core::OrderResNormalized::from_ccxt_user_data_stream_msg(
+            json.at("data"));
+        out.status = OrderLookup::Status::FOUND;
+        return out;
     } catch (...) {
         nlohmann::json error_json;
         error_json["endpoint"] = "query-order";
@@ -697,15 +727,28 @@ std::optional<Core::OrderResNormalized> CcxtProxy::query_order(
         error_json["client_order_id"] = client_order_id;
         LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_RESPONSE_PARSE_FAILED,
                   "query_order failed", error_json);
-        return std::nullopt;
+        return OrderLookup{};
     }
+}
+
+CcxtProxy::OrderLookup CcxtProxy::lookup_order(const Core::Order &order) {
+    return this->lookup_order(order.exchange_name, order.market_type,
+                              order.account_id, order.get_order_api_symbol(),
+                              order.get_order_lookup_id());
+}
+
+std::optional<Core::OrderResNormalized> CcxtProxy::query_order(
+    const std::string &exchange_name, const std::string &market_type,
+    const long long &account_id, const std::string &symbol,
+    const std::string &client_order_id) {
+    return this->lookup_order(exchange_name, market_type, account_id, symbol,
+                              client_order_id)
+        .order;
 }
 
 std::optional<Core::OrderResNormalized> CcxtProxy::query_order(
     const Core::Order &order) {
-    return this->query_order(order.exchange_name, order.market_type,
-                             order.account_id, order.get_order_api_symbol(),
-                             order.get_order_lookup_id());
+    return this->lookup_order(order).order;
 }
 
 std::vector<MarketData::NormalizedParsedTrade> CcxtProxy::get_historical_trades(
@@ -744,6 +787,7 @@ std::vector<MarketData::NormalizedParsedTrade> CcxtProxy::get_historical_trades(
                                         {"retry_after_s", retry_after}}));
             return {};
         }
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -811,6 +855,7 @@ CcxtProxy::get_historical_trades_by_id(
                                         {"retry_after_s", retry_after}}));
             return {};
         }
+        if (res.first == 0) return {};
         if (res.first > 299) {
             LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_REQUEST_FAILED,
                       "get_historical_trades_by_id HTTP " +
@@ -851,8 +896,21 @@ CcxtProxy::get_historical_trades_by_id(
     }
 }
 
+static std::vector<std::string> lighter_symbols(const std::string &market_type,
+                                                bool active_only) {
+    std::vector<std::string> symbols;
+    if (market_type != "swap") return symbols;
+    auto &markets = LighterDirect::LighterMarkets::instance();
+    markets.ensure_loaded();
+    for (const auto &market : markets.all()) {
+        if (!active_only || market.is_active) symbols.push_back(market.symbol);
+    }
+    return symbols;
+}
+
 std::vector<std::string> CcxtProxy::get_exchange_symbols(
     const std::string &exchange_name, const std::string &market_type) {
+    if (exchange_name == "lighter") return lighter_symbols(market_type, false);
     std::string rate_key = exchange_name + ":" + market_type;
     if (RateLimiter::instance().is_limited(rate_key)) return {};
     try {
@@ -870,6 +928,7 @@ std::vector<std::string> CcxtProxy::get_exchange_symbols(
             RateLimiter::instance().record_limit(rate_key, retry_after);
             return {};
         }
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -890,6 +949,7 @@ std::vector<std::string> CcxtProxy::get_exchange_symbols(
 
 std::vector<std::string> CcxtProxy::get_exchange_active_symbols(
     const std::string &exchange_name, const std::string &market_type) {
+    if (exchange_name == "lighter") return lighter_symbols(market_type, true);
     if (rate_blocked(exchange_name, market_type)) return {};
     try {
         auto res =
@@ -897,6 +957,7 @@ std::vector<std::string> CcxtProxy::get_exchange_active_symbols(
                          exchange_name + "&market_type=" + market_type,
                      "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -965,6 +1026,7 @@ std::vector<MarketData::OhlcvDatasetTick> CcxtProxy::get_ohlcv_dataset_ticks(
             RateLimiter::instance().record_limit(rate_key, retry_after);
             return fail();
         }
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return fail();
         }
@@ -985,6 +1047,16 @@ std::vector<MarketData::OhlcvDatasetTick> CcxtProxy::get_ohlcv_dataset_ticks(
         return MarketData::OhlcvDatasetTick::from_cpp_proxy_res(
             json, exchange_name, market_type,
             MarketData::convert_interval_str_to_ms(interval));
+    } catch (const std::exception& error) {
+        LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_RESPONSE_PARSE_FAILED,
+                  "get_ohlcv_dataset_ticks failed",
+                  (nlohmann::json{{"endpoint", "historical-data/bars"},
+                                  {"exchange_name", exchange_name},
+                                  {"market_type", market_type},
+                                  {"symbol", symbol},
+                                  {"interval", interval},
+                                  {"error", error.what()}}));
+        return fail();
     } catch (...) {
         LOG_ERROR(Core::TRADING_LOG_EVENT_TYPE_CCXT_PROXY_RESPONSE_PARSE_FAILED,
                   "get_ohlcv_dataset_ticks failed",
@@ -1052,6 +1124,7 @@ std::vector<Core::SymbolPriceInfo> CcxtProxy::fetch_prices(
                                 exchange_name + "&market_type=" + market_type,
                             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }
@@ -1126,6 +1199,9 @@ void CcxtProxy::update_swaps_leverage_level(const std::string &exchange_name,
 std::optional<Core::OrderBookLevels> CcxtProxy::get_full_orderbook(
     const std::string &exchange_name, const std::string &market_type,
     const std::string &symbol, int limit) {
+    // Lighter's book is seeded by the snapshot its websocket sends on
+    // subscribe; there is no proxy route for it.
+    if (exchange_name == "lighter") return std::nullopt;
     if (rate_blocked(exchange_name, market_type)) return std::nullopt;
     try {
         auto res = http_req(
@@ -1136,6 +1212,7 @@ std::optional<Core::OrderBookLevels> CcxtProxy::get_full_orderbook(
             "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
 
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return std::nullopt;
         }
@@ -1213,6 +1290,7 @@ std::vector<Core::AssetBorrowableInfo> CcxtProxy::fetch_borrowable_inventories(
 
         auto res = http_req(url, "GET", "");
         note_rate_limit(exchange_name, market_type, res.first, res.second);
+        if (res.first == 0) return {};
         if (res.first > 299) {
             return {};
         }

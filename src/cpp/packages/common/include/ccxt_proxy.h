@@ -34,7 +34,9 @@ class CcxtProxy {
     CcxtProxy(const CcxtProxy &) = delete;
     CcxtProxy &operator=(const CcxtProxy &) = delete;
 
-    std::optional<nlohmann::json> create_order(const Core::Order &order);
+    // http_status: -1 not sent, 0 no response, else the proxy's HTTP status.
+    std::optional<nlohmann::json> create_order(const Core::Order &order,
+                                               int *http_status = nullptr);
     std::vector<Core::PolymarketBulkOrderResult> create_polymarket_orders_bulk(
         const std::vector<Core::Order> &orders);
     void cancel_order_v2(const std::string &client_order_id,
@@ -101,6 +103,20 @@ class CcxtProxy {
 
     std::optional<Core::OrderResNormalized> query_order(
         const Core::Order &order);
+
+    // NOT_FOUND only when the venue says the order does not exist (proxy 404);
+    // transport errors, 5xx and rate limits are UNKNOWN.
+    struct OrderLookup {
+        enum class Status { FOUND, NOT_FOUND, UNKNOWN };
+        Status status = Status::UNKNOWN;
+        std::optional<Core::OrderResNormalized> order;
+    };
+    OrderLookup lookup_order(const std::string &exchange_name,
+                             const std::string &market_type,
+                             const long long &account_id,
+                             const std::string &symbol,
+                             const std::string &client_order_id);
+    OrderLookup lookup_order(const Core::Order &order);
 
     std::vector<MarketData::NormalizedParsedTrade> get_historical_trades(
         const std::string &exchange_name, const std::string &market_type,

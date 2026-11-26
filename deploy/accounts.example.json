@@ -1,0 +1,15 @@
+{
+  "hyperliquid_futures_accounts": [
+    {
+      "account_id": 1,
+      "access": "0x0000000000000000000000000000000000000000",
+      "secret": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "aster_futures_accounts": [],
+  "polymarket_accounts": [],
+  "binance_futures_accounts": [],
+  "binance_spot_accounts": [],
+  "bybit_futures_accounts": [],
+  "bybit_spot_accounts": []
+}

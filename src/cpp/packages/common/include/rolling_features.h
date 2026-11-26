@@ -285,7 +285,7 @@ class RollingRangePos {
 };
 
 // Burst feature block — 5 outputs per window with a 24h z-score baseline.
-// Mirrors `burst_features_binance_swap.py`.
+// Rolling burst features for swap trade streams.
 class RollingBurst {
    public:
     RollingBurst(long long window_ms, int window_sec, long long norm_ms)

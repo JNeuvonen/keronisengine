@@ -102,11 +102,12 @@ void Core::BacktestState::update_quote_asset(
 }
 
 void Core::BacktestState::update_fees(const Order& order,
+                                      const mpfr::mpreal& fill_price,
                                       bool is_taker_execution) {
     const std::string& exchange_name = order.exchange_name;
     const std::string& market_type = order.market_type;
     const auto& fees =
-        order.quantity * order.price *
+        order.quantity * fill_price *
         this->get_fees_coeff(exchange_name, market_type, is_taker_execution);
     this->total_fees += fees;
     this->update_quote_asset(order.exchange_name, order.market_type,
@@ -114,7 +115,8 @@ void Core::BacktestState::update_fees(const Order& order,
                              -1 * fees);
 }
 
-void Core::BacktestState::update_pnl(const Order& order) {
+void Core::BacktestState::update_pnl(const Order& order,
+                                     const mpfr::mpreal& fill_price) {
     if (!order.trade_id.has_value()) {
         return;
     }
@@ -135,16 +137,16 @@ void Core::BacktestState::update_pnl(const Order& order) {
     bool is_short_close = order.side == Core::OrderSide::BUY;
     const auto& pnl =
         is_short_close
-            ? (trade.value().get_average_open_price() - order.price) *
+            ? (trade.value().get_average_open_price() - fill_price) *
                   order.quantity
-            : (order.price - trade.value().get_average_open_price()) *
+            : (fill_price - trade.value().get_average_open_price()) *
                   order.quantity;
 
     auto total_pnl_before = this->total_pnl;
 
     this->total_pnl += pnl;
     this->total_trades++;
-    this->total_volume += order.price * order.quantity;
+    this->total_volume += fill_price * order.quantity;
     if (pnl > 0) {
         this->winning_trades++;
         this->total_winning_pnl += pnl;
@@ -158,6 +160,7 @@ void Core::BacktestState::update_pnl(const Order& order) {
 }
 
 void Core::BacktestState::backtest_update_inventory(const Order& order,
+                                                    const mpfr::mpreal& fill_price,
                                                     bool is_taker_execution) {
     std::string key = Utils::get_symbol_exchange_market_account_key(
         order.get_potentially_alt_routed_symbol(), order.exchange_name,
@@ -180,7 +183,7 @@ void Core::BacktestState::backtest_update_inventory(const Order& order,
 
     if (order.market_type == SWAP_MARKET_TYPE) {
         used_margin =
-            order.quantity * order.price * this->sim_params.swap_leverage;
+            order.quantity * fill_price * this->sim_params.swap_leverage;
     }
 
     this->backtest_inventories[key].total += order.side == Core::OrderSide::BUY
@@ -199,8 +202,8 @@ void Core::BacktestState::backtest_update_inventory(const Order& order,
             price.value() * (1 / this->sim_params.swap_leverage);
     }
 
-    this->update_fees(order, is_taker_execution);
-    this->update_pnl(order);
+    this->update_fees(order, fill_price, is_taker_execution);
+    this->update_pnl(order, fill_price);
 
     auto backtest_inventory = this->backtest_inventories.find(key);
 
@@ -2112,7 +2115,7 @@ void Core::BacktestState::on_order_fill(const Order& order,
     this->deferred_cancel_acks_.erase(order.id);
     OrderFillInfo order_fill_info =
         this->create_order_fill_info(order, price, timestamp);
-    this->backtest_update_inventory(order, is_taker_execution);
+    this->backtest_update_inventory(order, price, is_taker_execution);
     ::Core::Engine::getInstance().order_filled_ack(order_fill_info);
 
     if (!is_taker_execution && !order.is_taker_in_simulation) {

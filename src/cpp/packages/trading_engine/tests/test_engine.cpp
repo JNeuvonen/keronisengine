@@ -386,6 +386,35 @@ TEST_CASE(
     REQUIRE(got->total == mpfr::mpreal("1.5"));
 }
 
+TEST_CASE(
+    "Engine::update_inventory_and_quote_assets zeroes a symbol the snapshot "
+    "leaves out",
+    "[engine][inventory]") {
+    TestHelpers::ensure_minimal_engine();
+    auto& engine = Core::Engine::getInstance();
+
+    engine.update_inventory_and_quote_assets(
+        "binance", "swap", 7,
+        {make_inventory("INIT", 407.0, 0, 0, "INITUSDT"),
+         make_inventory("RECALL", -1790.0, 0, 0, "RECALLUSDT")},
+        {});
+    engine.update_inventory_and_quote_assets(
+        "binance", "swap", 8, {make_inventory("INIT", 5.0, 0, 0, "INITUSDT")},
+        {});
+    engine.update_inventory_and_quote_assets(
+        "binance", "swap", 7, {make_inventory("RECALL", -1000.0, 0, 0, "RECALLUSDT")},
+        {});
+
+    auto init = engine.get_inventory("binance", "swap", "INITUSDT", 7);
+    REQUIRE(init.has_value());
+    REQUIRE(init->total == 0);
+    REQUIRE(init->long_total == 0);
+    REQUIRE(engine.get_inventory("binance", "swap", "RECALLUSDT", 7)->total ==
+            mpfr::mpreal("-1000"));
+    REQUIRE(engine.get_inventory("binance", "swap", "INITUSDT", 8)->total ==
+            mpfr::mpreal("5"));
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Section — Engine clock + time
 // ──────────────────────────────────────────────────────────────────────

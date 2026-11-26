@@ -148,7 +148,8 @@ json PQUtils::strategy_rows_to_config(const json &strategy_row,
         config["exchanges_list"] = json::array();
         for (const auto &exchange : exchanges) {
             json entry = json::object();
-            for (const char *key : {"exchange_name", "market_type", "account_id"}) {
+            for (const char *key : {"exchange_name", "market_type", "account_id",
+                                    "paper_fill_latency_ms"}) {
                 if (exchange.contains(key)) entry[key] = exchange.at(key);
             }
             config["exchanges_list"].push_back(entry);

@@ -140,6 +140,11 @@ TEST_CASE("Exchange enum maps ibkr string roundtrip", "[order][create][exchange]
     REQUIRE(Core::exchange_to_str(Core::Exchange::IBKR) == "ibkr");
 }
 
+TEST_CASE("Exchange enum maps lighter string roundtrip", "[order][create][exchange]") {
+    REQUIRE(Core::exchange_from_str("lighter") == Core::Exchange::LIGHTER);
+    REQUIRE(Core::exchange_to_str(Core::Exchange::LIGHTER) == "lighter");
+}
+
 TEST_CASE(
     "Order::create throws when is_alt_market_routed is true but alt fields "
     "are missing",
@@ -692,6 +697,22 @@ TEST_CASE("Order::from_order_res_normalized extracts full fill",
     REQUIRE(fill.sizing_coeff_delta == mpfr::mpreal("1.0"));
 }
 
+TEST_CASE("Order::from_order_res_normalized books an IOC fill as taker",
+          "[order][fill-extraction]") {
+    TestHelpers::ensure_minimal_engine();
+
+    auto order = make_test_order();
+    order.type = Core::OrderType::IMMEDIATE_OR_CANCEL;
+
+    Core::OrderResNormalized res;
+    res.symbol = "BTCUSDT";
+    res.client_order_id = order.client_order_id;
+    res.filled_quantity = mpfr::mpreal("0.100");
+    res.price = mpfr::mpreal("50000.00");
+
+    CHECK_FALSE(order.from_order_res_normalized(Core::Engine::getInstance(), res).is_maker);
+}
+
 TEST_CASE(
     "Order::from_order_res_normalized handles partial fill delta correctly",
     "[order][fill-extraction]") {
@@ -753,4 +774,21 @@ TEST_CASE(
     auto fill2 = order.from_order_res_normalized(
         Core::Engine::getInstance(), res);
     REQUIRE_FALSE(fill2.is_fee_paid_in_base_asset);
+}
+
+TEST_CASE("OrderResNormalized takes only the venue average as a fill price",
+          "[order_res][fill_price]") {
+    nlohmann::json msg = {
+        {"symbol", "X/USDT:USDT"}, {"clientOrderId", "a"}, {"id", "1"},
+        {"status", "closed"},      {"amount", 745.0},      {"filled", 745.0},
+        {"price", 0.07461},        {"average", nullptr},   {"cost", 55.58445},
+        {"timestamp", 1LL}};
+    auto no_average = Core::OrderResNormalized::from_ccxt_user_data_stream_msg(msg);
+    CHECK_FALSE(no_average.has_fill_price);
+
+    msg["average"] = 0.0738199;
+    msg["cost"] = 54.996;
+    auto with_average = Core::OrderResNormalized::from_ccxt_user_data_stream_msg(msg);
+    CHECK(with_average.has_fill_price);
+    CHECK(with_average.price == mpfr::mpreal(0.0738199));
 }

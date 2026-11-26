@@ -8,7 +8,6 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <functional>
 #include <random>
 #include <thread>
@@ -36,6 +35,15 @@
 namespace {
 
 std::function<void(const std::string &, const nlohmann::json &)> g_log_callback;
+
+void sigterm_handler(int /*sig*/) {
+    // A second SIGTERM, or one before the loop runs, exits at once.
+    if (Live::StateUpdater::main_loop_running.load() &&
+        !Live::StateUpdater::termination_requested.exchange(true)) {
+        return;
+    }
+    std::_Exit(3);
+}
 
 void signal_handler(int sig) {
     if (g_log_callback) {
@@ -72,7 +80,7 @@ void setup_signal_handlers(
     signal(SIGABRT, signal_handler);
     signal(SIGFPE, signal_handler);
     signal(SIGILL, signal_handler);
-    signal(SIGTERM, signal_handler);
+    signal(SIGTERM, sigterm_handler);
 }
 
 void check_prev_program_uptime() {
@@ -220,7 +228,7 @@ int main() {
     HistoricalFeatureGen::register_live_state_machines();
 
     // Optional HTTP control server. Off by default; opt in via env var.
-    // See agentic_system/subsystems/cpp/live_infra/LIVE_INFRA.md.
+    // Optional HTTP control and introspection server.
     std::unique_ptr<EngineControl::Server> control_server;
     if (const char *enable = std::getenv("ENABLE_ENGINE_CONTROL_SERVER");
         enable != nullptr && std::strcmp(enable, "1") == 0) {

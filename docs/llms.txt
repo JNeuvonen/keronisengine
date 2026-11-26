@@ -1,0 +1,29 @@
+# KeronisEngine
+
+> Open-source C++20 trading engine capable of ingesting full-exchange crypto feeds (10,000+ msg/s) with continuous streaming feature state machines and in-process ONNX Runtime inference on a single ~$100 dedicated server. Apache-2.0 licensed.
+
+## Full Documentation (Single-Fetch Markdown)
+
+- [Complete Documentation Bundle](https://engine.keronis.ai/llms-full.txt): All documentation pages concatenated in clean Markdown for single-request ingestion.
+
+## Documentation Pages
+
+- [Home](https://engine.keronis.ai/): Overview, performance highlights, and supported venues.
+- [Quickstart](https://engine.keronis.ai/quickstart/): Docker and native Linux build instructions, unit tests, and runnable SMA crossover backtest.
+- [Architecture](https://engine.keronis.ai/architecture/): `Core::Engine`, `TradeTicker`, `RingBufferBook`, `StrategyStateMachine`, `BacktestState`, `PaperExchange`, and `live_infra`.
+- [Comparison](https://engine.keronis.ai/comparison/): Honest comparison with NautilusTrader and HFTBacktest.
+- [Writing a Strategy](https://engine.keronis.ai/strategies/): `KERONIS_REGISTER_STRATEGY`, `-DKERONIS_STRATEGY_DIRS`, `strategy_helpers.h`, and quote-pull gates.
+- [State Machines & ONNX](https://engine.keronis.ai/state-machines/): `KERONIS_REGISTER_STATE_MACHINE`, `historical_feature_gen`, and ONNX Runtime inference.
+- [Live & Paper Trading](https://engine.keronis.ai/live-and-paper/): Docker Compose stack (Postgres + NATS), `schema.sql`, `PaperExchange`, `QuoteHolds`, and direct venue signing.
+- [Control Server API](https://engine.keronis.ai/control-server/): Embedded HTTP introspection and gated control endpoints (`/control/*`).
+- [Configuration & Env Vars](https://engine.keronis.ai/configuration/): Complete environment variable and backtest `config.json` reference.
+
+## Key Source Entry Points (GitHub)
+
+- [Repository](https://github.com/JNeuvonen/keronisengine)
+- [Strategy Registry](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/trading_engine/include/market_making/strategy_registry.h)
+- [Strategy Helpers](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/trading_engine/include/market_making/strategy_helpers.h)
+- [Example Strategy (sma_crossover)](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp)
+- [RingBufferBook](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/trading_engine/include/market_making/dtypes/ring_buffer_book.h)
+- [PaperExchange](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/live_infra/include/live_infra/paper_exchange.h)
+- [QuoteHolds](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/live_infra/include/live_infra/quote_holds.h)

@@ -20,6 +20,10 @@ struct BarClosePolicy {
                                  long long time_ms,
                                  bool store_only_high_and_low = false);
 
+    static BarClosePolicy time_bars(long long time_ms) {
+        return create(false, false, true, false, 0, 0, time_ms);
+    }
+
     [[nodiscard]] std::string to_string() const;
 
     std::string get_bar_type_and_close_threshold() const;

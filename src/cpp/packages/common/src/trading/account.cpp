@@ -81,8 +81,8 @@ void Trading::Account::init_account() {
 }
 
 std::optional<nlohmann::json> Trading::Account::create_order(
-    const Core::Order& order) {
-    return this->ccxt_proxy.create_order(order);
+    const Core::Order& order, int* http_status) {
+    return this->ccxt_proxy.create_order(order, http_status);
 }
 
 std::vector<PolymarketDirect::PolymarketClient::SignedOrderBody>
@@ -270,9 +270,9 @@ std::string Trading::Account::get_multi_stream_ws_base_url() {
     return "";
 }
 
-std::optional<Core::OrderResNormalized> Trading::Account::query_invidual_order(
+CcxtProxy::OrderLookup Trading::Account::query_invidual_order(
     const Core::Order& order) {
-    return this->ccxt_proxy.query_order(order);
+    return this->ccxt_proxy.lookup_order(order);
 }
 
 std::optional<std::string> Trading::Account::get_user_data_stream_url() {

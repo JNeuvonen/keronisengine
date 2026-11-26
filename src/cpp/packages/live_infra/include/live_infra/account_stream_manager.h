@@ -116,6 +116,8 @@ class AccountStreamManager {
         // Suppresses repeated STALE emits for the same stale window; reset on
         // message receipt.
         bool stale_already_emitted{false};
+        std::optional<std::chrono::steady_clock::time_point> last_reconnect_attempt;
+        bool outage_error_emitted{false};
     };
 
     std::vector<ManagedStream> streams_;

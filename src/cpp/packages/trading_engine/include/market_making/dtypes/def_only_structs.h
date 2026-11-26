@@ -28,6 +28,10 @@ struct ExchangeAndMarket {
     std::string exchange_name;
     std::string market_type;
     std::optional<long long> account_id;
+    // Paper fills on venues with a depth model are judged against the book
+    // this long after the ack. Not part of operator==: changing it must not
+    // read as a ticker-config change.
+    std::optional<long long> paper_fill_latency_ms;
 
     bool operator==(const ExchangeAndMarket& other) const {
         return exchange_name == other.exchange_name &&
@@ -40,6 +44,8 @@ struct ExchangeAndMarket {
         json["exchange_name"] = exchange_name;
         json["market_type"] = market_type;
         json["account_id"] = account_id.value_or(-1);
+        if (paper_fill_latency_ms.has_value())
+            json["paper_fill_latency_ms"] = *paper_fill_latency_ms;
         return json;
     }
 };
@@ -445,6 +451,8 @@ struct OrderCreationResult {
     bool success = false;
     std::string exchange_order_id;
     std::string error_msg;
+    // The venue's order (ccxt shape) when the response carried one.
+    std::optional<nlohmann::json> order;
 };
 
 struct PolymarketBulkOrderResult {

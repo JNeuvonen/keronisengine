@@ -4,6 +4,7 @@ namespace Live {
 namespace Constants {
 
 constexpr const char* STREAM_EVENT_TYPE_ORDER_UPDATE = "order_update";
+constexpr const char* STREAM_EVENT_TYPE_HEARTBEAT = "heartbeat";
 constexpr const char* STREAM_EVENT_TYPE_POSITION_UPDATE = "position_update";
 constexpr const char* STREAM_EVENT_TYPE_ORDER_CREATE_FAILED =
     "order_create_failed";

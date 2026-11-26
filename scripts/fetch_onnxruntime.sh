@@ -9,7 +9,8 @@ case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) asset="onnxruntime-osx-arm64-${version}" ;;
     *) echo "unsupported platform $(uname -s)-$(uname -m)" >&2; exit 1 ;;
 esac
-root="$(git rev-parse --show-toplevel)/third_party"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$SCRIPT_DIR/.." && pwd)/third_party"
 mkdir -p "$root"
 if [[ ! -d "$root/$asset" ]]; then
     curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${version}/${asset}.tgz" \

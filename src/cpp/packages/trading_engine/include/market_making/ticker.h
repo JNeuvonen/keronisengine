@@ -232,6 +232,7 @@ class TradeTicker {
 
     void add_synthethic_order_for_event_creation(const Order& order);
     std::vector<Order> get_orders(bool require_lock = true);
+    std::vector<Order> get_removed_orders();
     std::vector<Trade> get_trades(bool require_lock = true);
 
     // Zero-copy accessors for callers that ALREADY hold trading_mutex (e.g.
