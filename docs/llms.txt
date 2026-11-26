@@ -25,6 +25,7 @@
 - [strategy_helpers.h](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/trading_engine/include/market_making/strategy_helpers.h)
 - [binance_onnx_perp.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/binance_onnx_perp/binance_onnx_perp.cpp)
 - [polymarket_digital.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/polymarket_digital/polymarket_digital.cpp)
+- [cross_venue_arb.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/cross_venue_arb/cross_venue_arb.cpp)
 - [windowed_taker_flow_sm.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/historical_feature_gen/src/transformations/windowed_taker_flow_sm.cpp)
 - [spread_sm.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/historical_feature_gen/src/transformations/spread_sm.cpp)
 - [sma_crossover.cpp](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp)

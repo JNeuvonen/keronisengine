@@ -87,6 +87,14 @@ for (int outcome = 0; outcome < 2; ++outcome) {
 
 ---
 
+## Cross-Venue Arbitrage
+
+Source: [`src/cpp/packages/strategies/cross_venue_arb/cross_venue_arb.cpp`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/cross_venue_arb/cross_venue_arb.cpp)
+
+A minimal cross-venue lead-lag / spread arbitrage example. It subscribes to `binance:swap` via `strategy.signal_exchanges`, compares the live reference price against the traded venue (e.g., Hyperliquid or Aster), enters when the dislocation exceeds `kEntrySpreadBps`, and closes once the spread reverts below `kExitSpreadBps`.
+
+---
+
 ## Quickstart example: SMA crossover
 
 Source: [`src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/strategies/sma_crossover/sma_crossover.cpp)
@@ -108,8 +116,9 @@ A self-contained 5/20 moving-average crossover on 1-minute bars used by `example
 
 ## Bundled reference strategies
 
+- **`polymarket_digital`**: Polymarket short-dated digital options market making (Binance reference price → fair probability → native Polymarket CLOB execution).
 - **`binance_onnx_perp`**: Binance perpetuals predictive-model strategy (`WindowedTakerFlowSM` → `OnnxModel::predict()` → `Core::StrategyHelpers`).
-- **`polymarket_digital`**: Polymarket short-dated digital options strategy (Binance reference price → fair probability → native Polymarket CLOB execution).
+- **`cross_venue_arb`**: Cross-venue lead-lag / spread arbitrage between Binance perpetuals and a traded execution venue.
 - **`sma_crossover`**: 5/20 moving-average crossover on 1-minute bars (used by the quickstart backtest).
 - **`test_quoter`**, **`test_taker`**, **`test_market_maker`**: Minimal order-routing test harnesses.
 - **`discretionary`**: Command-driven execution with stops and take-profits.

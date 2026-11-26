@@ -116,6 +116,44 @@ std::vector<Core::StrategyDecision> on_market_event(
 
 KERONIS_REGISTER_STRATEGY("binance_onnx_perp", bind_binance_onnx_perp);`;
 
+const codeCrossVenueArb = `// src/cpp/packages/strategies/cross_venue_arb/cross_venue_arb.cpp
+// Cross-venue lead-lag / spread arbitrage:
+// Compares a fast Binance reference price against the traded venue (e.g. Hyperliquid or Aster)
+// and executes when the spread exceeds kEntrySpreadBps, exiting on mean reversion.
+std::vector<Core::StrategyDecision> on_market_event(
+    Core::Engine& engine, Core::Strategy& strategy,
+    std::optional<Core::MarketEvent>) {
+    std::vector<Core::StrategyDecision> decisions;
+
+    for (auto& [symbol, ticker] : strategy.trade_tickers) {
+        std::lock_guard<std::mutex> lock(ticker->trading_mutex);
+        if (!ticker->get_orders(false).empty() || ticker->exchange_and_markets.empty()) continue;
+
+        const auto& em = ticker->exchange_and_markets.front();
+        const auto exec_px = engine.get_price(symbol, em.exchange_name, em.market_type);
+        const auto ref_px = engine.get_price(symbol, "binance", "swap");
+        if (!exec_px || !ref_px || *exec_px <= 0.0 || *ref_px <= 0.0) continue;
+
+        const double spread_bps = ((*ref_px - *exec_px) / *exec_px) * 10'000.0;
+        const auto trades = ticker->get_trades(false);
+
+        Core::StrategyDecision decision;
+        decision.symbol = symbol;
+        if (trades.empty() && spread_bps > kEntrySpreadBps) {
+            Core::StrategyHelpers::submit_market_order(
+                engine, strategy, *ticker, Core::OrderSide::BUY, *exec_px,
+                mpfr::mpreal(kOrderQty), decision);
+        } else if (!trades.empty() && spread_bps < kExitSpreadBps) {
+            Core::StrategyHelpers::close_trade_market(
+                engine, strategy, *ticker, trades.front(), *exec_px, decision);
+        }
+        if (!decision.orders.empty()) decisions.push_back(std::move(decision));
+    }
+    return decisions;
+}
+
+KERONIS_REGISTER_STRATEGY("cross_venue_arb", bind_cross_venue_arb);`;
+
 const codeSpreadSm = `// src/cpp/packages/historical_feature_gen/src/transformations/spread_sm.cpp
 // Streaming feature template: runs identically in offline Parquet training panels,
 // historical backtests, paper trading, and live execution.
@@ -951,19 +989,19 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       <div class="evidence" aria-label="Key performance figures">
         <div class="ev-item">
           <div class="ev-num"><span>&lt;1 ms</span></div>
-          <div class="ev-lbl">Tick-to-order decision latency</div>
+          <div class="ev-lbl">Tick → model prediction → order</div>
         </div>
         <div class="ev-item">
-          <div class="ev-num"><span>10,000+</span> msg/s</div>
-          <div class="ev-lbl">Live market feeds on a ~$100 server</div>
+          <div class="ev-num"><span>10k+</span> msg/s</div>
+          <div class="ev-lbl">Full-exchange feeds + live scoring on one Linux host</div>
         </div>
         <div class="ev-item">
-          <div class="ev-num"><span>1</span> feature engine</div>
-          <div class="ev-lbl">Identical C++ code in training &amp; live</div>
+          <div class="ev-num"><span>1</span> codebase</div>
+          <div class="ev-lbl">Identical C++ features in research &amp; live</div>
         </div>
         <div class="ev-item">
-          <div class="ev-num"><span>In-process</span></div>
-          <div class="ev-lbl">ONNX Runtime model inference</div>
+          <div class="ev-num"><span>ONNX</span> native</div>
+          <div class="ev-lbl">Run LightGBM, XGBoost &amp; PyTorch on every tick</div>
         </div>
       </div>
 
@@ -1148,6 +1186,11 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="sec-head">
           <div class="kicker">Markets &amp; Venues</div>
           <h2>Built to generalize across asset classes</h2>
+          <p class="sec-desc">
+            Crypto, Polymarket, and US equities (Massive.com + IBKR) are built in. Adding your own
+            exchange, broker, or sportsbook feed is a thin adapter—reuse the entire feature, ONNX,
+            backtest, and risk stack.
+          </p>
         </div>
 
         <div class="asset-tabs" role="tablist" aria-label="Supported markets">
@@ -1158,7 +1201,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
             Crypto Spot &amp; Perpetuals
           </button>
           <button class="asset-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="asset-equities" id="atab-equities">
-            US Equities (IBKR)
+            US Equities (Massive.com + IBKR)
           </button>
           <button class="asset-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="asset-sports" id="atab-sports">
             Sports &amp; Custom Event Feeds
@@ -1230,30 +1273,31 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
         <div class="asset-panel" id="asset-equities" role="tabpanel" aria-labelledby="atab-equities">
           <div class="asset-copy">
-            <h3>US Equities via Interactive Brokers</h3>
+            <h3>US Equities via Massive.com &amp; Interactive Brokers</h3>
             <p>
-              The bundled Python venue proxy ships with an IBKR gateway session manager, active and
-              delisted US equity catalog, and order lifecycle routing—bringing the same C++ feature
-              and ONNX execution stack to equities.
+              Real-time and historical US equities market data via Massive.com (formerly Polygon.io)
+              paired with Interactive Brokers (IBKR) gateway execution and a survivorship-safe equity
+              catalog—bringing the same C++ feature and ONNX stack to stocks.
             </p>
             <div class="venue-list">
+              <span class="vtag native">Massive.com (Polygon.io) Feeds</span>
               <span class="vtag native">IBKR TWS / Gateway</span>
               <span class="vtag">Active + Delisted Catalog</span>
               <span class="vtag">Paper &amp; Live Routing</span>
             </div>
             <a href="/live-and-paper/" class="inline-link">Live &amp; proxy documentation →</a>
           </div>
-          <div class="trace-box" aria-label="IBKR equities execution trace">
+          <div class="trace-box" aria-label="US equities execution trace">
             <div class="trace-head">
-              <span>ibkr · US EQUITIES</span>
-              <span>BUNDLED PROXY</span>
+              <span>us_equities · MASSIVE + IBKR</span>
+              <span>BUILT-IN</span>
             </div>
             <div class="trace-body">
-              <div class="trace-row"><span>gateway</span><strong>127.0.0.1:4002 (paper) / 4001</strong></div>
-              <div class="trace-row"><span>catalog</span><strong class="acc">Active + Delisted US Equities</strong></div>
-              <div class="trace-row"><span>order_types</span><strong>LIMIT · MARKET · IOC · FOK</strong></div>
+              <div class="trace-row"><span>market_data</span><strong class="acc">Massive.com (Polygon.io) WS / Bars</strong></div>
+              <div class="trace-row"><span>execution</span><strong>IBKR Gateway (4002 Paper / 4001 Live)</strong></div>
+              <div class="trace-row"><span>catalog</span><strong>Active + Delisted US Equities</strong></div>
               <div class="trace-row"><span>risk</span><strong>Exposure caps · Rate limits</strong></div>
-              <div class="trace-out">→ live_infra → cpp_live_proxy → IBKR Gateway</div>
+              <div class="trace-out">→ Massive.com ticks → C++ features &amp; ONNX → IBKR execution</div>
             </div>
           </div>
         </div>
@@ -1293,23 +1337,26 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
       <section class="band">
         <div class="sec-head">
           <div class="kicker">Source Examples</div>
-          <h2>Compiled strategies and streaming features</h2>
+          <h2>Market making, predictive ML, and arbitrage—in real C++</h2>
           <p class="sec-desc">
-            Keep proprietary alpha in a private directory and compile it directly into KeronisEngine
-            without forking.
+            Every strategy style runs on the same compiled core. Keep proprietary alpha in a private
+            directory and link it directly into KeronisEngine without forking.
           </p>
         </div>
 
         <div class="code-shell">
           <div class="code-tablist" role="tablist" aria-label="Compiled C++ examples">
             <button class="code-tab" role="tab" aria-selected="true" tabindex="0" aria-controls="cpanel-poly" id="ctab-poly">
-              polymarket_digital.cpp
+              Market Making · polymarket_digital.cpp
             </button>
             <button class="code-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cpanel-binance" id="ctab-binance">
-              binance_onnx_perp.cpp
+              Predictive ML · binance_onnx_perp.cpp
+            </button>
+            <button class="code-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cpanel-arb" id="ctab-arb">
+              Arbitrage · cross_venue_arb.cpp
             </button>
             <button class="code-tab" role="tab" aria-selected="false" tabindex="-1" aria-controls="cpanel-sm" id="ctab-sm">
-              spread_sm.cpp
+              Features · spread_sm.cpp
             </button>
           </div>
 
@@ -1319,6 +1366,10 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
 
           <div class="code-panel" id="cpanel-binance" role="tabpanel" aria-labelledby="ctab-binance">
             <Code code={codeBinanceOnnx} lang="cpp" />
+          </div>
+
+          <div class="code-panel" id="cpanel-arb" role="tabpanel" aria-labelledby="ctab-arb">
+            <Code code={codeCrossVenueArb} lang="cpp" />
           </div>
 
           <div class="code-panel" id="cpanel-sm" role="tabpanel" aria-labelledby="ctab-sm">

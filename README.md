@@ -28,7 +28,7 @@ Documentation: **[engine.keronis.ai](https://engine.keronis.ai/)** · Machine-re
 | `backtest_runner` | Offline Parquet replay; outputs `summary.json`, `trades.json`, `equity_curve.json` |
 | `historical_feature_gen` | Offline replay of registered state machines to build Parquet ML training sets |
 | `engine_control_server` | Embedded localhost HTTP server for inspecting orders, inventory, books, and health |
-| `strategies/` | Flagship examples: `polymarket_digital`, `binance_onnx_perp`; plus `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
+| `strategies/` | Flagship examples: `polymarket_digital` (market making), `binance_onnx_perp` (predictive ML), `cross_venue_arb` (arbitrage); plus `sma_crossover`, `test_quoter`, `test_taker`, `test_market_maker`, `discretionary` |
 | `src/py/cpp_live_proxy` | Bundled FastAPI venue proxy for CCXT crypto exchanges (Binance, Bybit, OKX, Gate.io, Bitget, Coinbase), US equities (IBKR), user-data WebSockets, and direct-signing credentials |
 
 ## Streaming features → ONNX → order

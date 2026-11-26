@@ -97,4 +97,5 @@ TEST_CASE("WindowedTakerFlowSM tracks rolling buy/sell notional and expires old 
 TEST_CASE("Flagship example strategies are registered", "[state_machines]") {
     REQUIRE(Core::StrategyRegistry::find("polymarket_digital") != nullptr);
     REQUIRE(Core::StrategyRegistry::find("binance_onnx_perp") != nullptr);
+    REQUIRE(Core::StrategyRegistry::find("cross_venue_arb") != nullptr);
 }
