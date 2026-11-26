@@ -11,7 +11,8 @@ const shouldRenderSearch =
 
 const pathname = Astro.url.pathname;
 const isQuickstart = pathname.startsWith('/quickstart');
-const isDocs = !isQuickstart && !pathname.startsWith('/architecture');
+const isFaq = pathname.startsWith('/faq');
+const isDocs = !isQuickstart && !isFaq && !pathname.startsWith('/architecture');
 ---
 
 <div class="header">
@@ -26,6 +27,7 @@ const isDocs = !isQuickstart && !pathname.startsWith('/architecture');
       <a href="/architecture/">Architecture</a>
       <a href="/docs/" aria-current={isDocs ? 'page' : undefined}>Docs</a>
       <a href="/quickstart/" aria-current={isQuickstart ? 'page' : undefined}>Quickstart</a>
+      <a href="/faq/" aria-current={isFaq ? 'page' : undefined}>FAQ</a>
     </nav>
     <div class="sl-flex social-icons">
       <SocialIcons />
