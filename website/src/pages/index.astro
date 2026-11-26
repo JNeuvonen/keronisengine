@@ -1,5 +1,6 @@
 ---
 import { Code } from '@astrojs/starlight/components';
+import TickPipelineStepper from '../components/TickPipelineStepper.astro';
 
 const title = 'KeronisEngine — High-Performance Infrastructure for Systematic Trading';
 const description =
@@ -1179,6 +1180,20 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
             <p>Ships with the C++20 engine, backtester, paper venue, and bundled CCXT/IBKR proxy—making it trivial to add your favourite trading venue or custom data feed.</p>
           </div>
         </div>
+      </section>
+
+      <!-- Step-by-Step Interactive Trace -->
+      <section class="band">
+        <div class="sec-head">
+          <div class="kicker">Step-by-Step Execution Trace</div>
+          <h2>Follow one tick from wire event to order</h2>
+          <p class="sec-desc">
+            Step through how a raw market event updates streaming C++ features, scores an ONNX model
+            in-process, clears risk gates, and dispatches across the execution seam.
+          </p>
+        </div>
+
+        <TickPipelineStepper />
       </section>
 
       <!-- Multi-Market Coverage -->

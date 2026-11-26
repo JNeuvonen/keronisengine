@@ -1,0 +1,559 @@
+---
+const steps = [
+  {
+    num: '01',
+    short: 'TradeEvent',
+    title: 'Raw trade event arrives',
+    symbol: 'MarketData::TradeEvent',
+    desc: 'A live WebSocket frame (or timestamp-ordered Parquet record in backtests) is parsed into a normalized TradeEvent and pushed onto the lock-free event queue. OHLCV bars and L2 deltas follow the exact same dispatch path.',
+    note: 'Same MarketEvent struct across live WS, PaperExchange, and backtest_runner.',
+    payloadTitle: 'INBOUND · MarketEvent::TRADE',
+    payloadBadge: 'WIRE / PARQUET',
+    lines: [
+      { k: 'type', v: '"TRADE"', cls: 'str' },
+      { k: 'symbol_key', v: '"BTCUSDT:binance:swap"', cls: 'acc' },
+      { k: 'price', v: '100420.50', cls: 'num' },
+      { k: 'qty', v: '1.85', cls: 'num' },
+      { k: 'is_buyer_maker', v: 'false  // aggressive taker buy', cls: 'sig' },
+      { k: 'timestamp_ms', v: '1732632012418', cls: 'num' },
+    ],
+  },
+  {
+    num: '02',
+    short: 'Feature SM',
+    title: 'Streaming feature state updates in C++',
+    symbol: 'WindowedTakerFlowSM::react_impl()',
+    desc: 'StateMachineDispatcher routes the event to the registered C++ state machine. Stale 1-second ring buckets expire automatically, the buy notional ($185,778) is accumulated, and emit_state() returns a contiguous float vector.',
+    note: 'Exact same compiled C++ class emits offline Parquet training panels.',
+    payloadTitle: 'STATE · emit_state() -> vector<float>',
+    payloadBadge: 'TRAIN/SERVE PARITY',
+    lines: [
+      { k: 'state_machine', v: '"windowed_taker_flow"', cls: 'str' },
+      { k: 'buy_ratio_5s', v: '0.780f', cls: 'sig' },
+      { k: 'trade_count_5s', v: '14.0f', cls: 'num' },
+      { k: 'buy_volume_5s', v: '185778.0f', cls: 'num' },
+      { k: 'sell_volume_5s', v: '52400.0f', cls: 'num' },
+      { k: 'vol_ratio_5s_vs_30s', v: '0.412f', cls: 'acc' },
+    ],
+  },
+  {
+    num: '03',
+    short: 'ONNX Runtime',
+    title: 'In-process ONNX inference scores the vector',
+    symbol: 'OnnxModel::predict(*features)',
+    desc: 'compute_predictions_callback passes the float vector straight into an in-process ONNX Runtime C++ session—no JSON serialization, no localhost HTTP hop, and no Python GIL. The scalar prediction is stored lock-free on the ticker.',
+    note: 'Works with any ONNX-exportable model and extends cleanly to custom C++ runtimes.',
+    payloadTitle: 'INFERENCE · AtomicSignal',
+    payloadBadge: 'IN-PROCESS ONNX',
+    lines: [
+      { k: 'artifact', v: '"taker_flow_v1.onnx"', cls: 'art' },
+      { k: 'input_tensor', v: 'float[1, 5]', cls: 'acc' },
+      { k: 'predicted_score', v: '0.712f', cls: 'sig' },
+      { k: 'enter_threshold', v: '0.650f  // triggered', cls: 'sig' },
+      { k: 'atomic_signal_main', v: 'store(0.712f, 1732632012418)', cls: 'num' },
+    ],
+  },
+  {
+    num: '04',
+    short: 'Strategy & Risk',
+    title: 'Strategy callback evaluates & passes risk gates',
+    symbol: 'Core::TradeTicker::construct_order()',
+    desc: 'on_market_event locks ticker->trading_mutex, reads atomic_signal_main.load(), confirms no resting orders or open trade exist, and calls submit_market_order. construct_order enforces exposure caps, rate limits, and quote-hold state.',
+    note: 'Every order passes identical risk checks in backtest, paper, and live.',
+    payloadTitle: 'RISK GATE · construct_order()',
+    payloadBadge: 'VALIDATED',
+    lines: [
+      { k: 'trading_mutex', v: 'LOCKED', cls: 'acc' },
+      { k: 'open_orders / trades', v: '0 / 0', cls: 'num' },
+      { k: 'quotes_pulled', v: 'false', cls: 'sig' },
+      { k: 'exposure_cap_check', v: 'PASS', cls: 'sig' },
+      { k: 'order_rate_limit', v: 'PASS', cls: 'sig' },
+      { k: 'construction_result', v: 'OrderConstructionResult::VALID', cls: 'sig' },
+    ],
+  },
+  {
+    num: '05',
+    short: 'Order Out',
+    title: 'Order dispatches across the execution seam',
+    symbol: 'Core::TradeTicker -> Venue Backend',
+    desc: 'The validated Core::Order is handed to whichever TradeTicker implementation is active: BacktestState for historical replay, PaperExchange for live depth-based simulation, a native C++ signer (Polymarket, Hyperliquid, Aster), or the bundled CCXT/IBKR proxy.',
+    note: 'Total tick -> features -> inference -> order decision completes in <1 ms.',
+    payloadTitle: 'OUTBOUND · Core::Order',
+    payloadBadge: '<1 MS HOT PATH',
+    lines: [
+      { k: 'symbol', v: '"BTCUSDT"', cls: 'str' },
+      { k: 'side / type', v: 'BUY / MARKET', cls: 'sig' },
+      { k: 'quantity (mpreal)', v: '"0.01"', cls: 'num' },
+      { k: 'reference_price', v: '100420.50', cls: 'num' },
+      { k: 'execution_target', v: '"Backtest | PaperExchange | Live"', cls: 'acc' },
+      { k: 'status', v: 'SUBMITTED', cls: 'sig' },
+    ],
+  },
+];
+---
+
+<div class="stepper" id="tick-stepper" data-step="0">
+  <div class="stepper-bar">
+    <div class="stepper-title">
+      <span class="stepper-tag">INTERACTIVE TRACE</span>
+      <span class="stepper-counter" id="stepper-counter">Step 1 / 5</span>
+    </div>
+    <div class="stepper-controls">
+      <button type="button" class="ctrl-btn" id="step-prev" aria-label="Previous step">← Prev</button>
+      <button type="button" class="ctrl-btn" id="step-next" aria-label="Next step">Next →</button>
+      <button type="button" class="ctrl-btn ctrl-play" id="step-play">Auto-play</button>
+    </div>
+  </div>
+
+  <!-- 5-Node Interactive Pipeline Track -->
+  <div class="track" role="tablist" aria-label="Tick to order pipeline steps">
+    {steps.map((s, idx) => (
+      <>
+        <button
+          type="button"
+          class={`node ${idx === 0 ? 'is-active' : ''}`}
+          role="tab"
+          aria-selected={idx === 0 ? 'true' : 'false'}
+          tabindex={idx === 0 ? '0' : '-1'}
+          data-index={idx}
+          id={`step-tab-${idx}`}
+          aria-controls={`step-panel-${idx}`}
+        >
+          <span class="node-num">{s.num}</span>
+          <span class="node-name">{s.short}</span>
+        </button>
+        {idx < steps.length - 1 && (
+          <div class="rail" data-rail={idx} aria-hidden="true">
+            <div class="rail-fill"></div>
+          </div>
+        )}
+      </>
+    ))}
+  </div>
+
+  <!-- Step Detail Panels -->
+  <div class="step-panels">
+    {steps.map((s, idx) => (
+      <div
+        class={`step-panel ${idx === 0 ? 'is-active' : ''}`}
+        role="tabpanel"
+        id={`step-panel-${idx}`}
+        aria-labelledby={`step-tab-${idx}`}
+        data-panel={idx}
+      >
+        <div class="step-explain">
+          <div class="step-sym">{s.symbol}</div>
+          <h3>{s.title}</h3>
+          <p>{s.desc}</p>
+          <div class="step-note">{s.note}</div>
+        </div>
+
+        <div class="payload-card">
+          <div class="payload-head">
+            <span>{s.payloadTitle}</span>
+            <span class="payload-badge">{s.payloadBadge}</span>
+          </div>
+          <div class="payload-body">
+            {s.lines.map((line) => (
+              <div class="pl-row">
+                <span class="pl-k">{line.k}</span>
+                <span class={`pl-v ${line.cls}`}>{line.v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    ))}
+  </div>
+</div>
+
+<style>
+  .stepper {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 6px;
+    background: #080b12;
+    overflow: hidden;
+  }
+
+  .stepper-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.7rem 1.1rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+    background: #0b0f17;
+  }
+
+  .stepper-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.85rem;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+  }
+
+  .stepper-tag {
+    color: #38bdf8;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }
+
+  .stepper-counter {
+    color: #94a3b8;
+  }
+
+  .stepper-controls {
+    display: inline-flex;
+    gap: 0.4rem;
+  }
+
+  .ctrl-btn {
+    appearance: none;
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    color: #cbd5e1;
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    padding: 0.34rem 0.72rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+
+  .ctrl-btn:hover {
+    border-color: #38bdf8;
+    color: #f1f5f9;
+  }
+
+  .ctrl-btn:focus-visible,
+  .node:focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+  }
+
+  .ctrl-play.is-playing {
+    border-color: rgba(52, 211, 153, 0.55);
+    background: rgba(52, 211, 153, 0.1);
+    color: #34d399;
+  }
+
+  /* Horizontal 5-node pipeline */
+  .track {
+    display: flex;
+    align-items: center;
+    padding: 1.25rem 1.25rem 1.1rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+    background: #090d15;
+    overflow-x: auto;
+    gap: 0;
+  }
+
+  .node {
+    appearance: none;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.52rem 0.85rem;
+    border-radius: 4px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: #0d121d;
+    color: #94a3b8;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    cursor: pointer;
+    transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .node:hover {
+    border-color: rgba(148, 163, 184, 0.45);
+    color: #f1f5f9;
+  }
+
+  .node-num {
+    color: #64748b;
+    font-size: 0.7rem;
+  }
+
+  .node.is-done {
+    border-color: rgba(52, 211, 153, 0.42);
+    color: #d1fae5;
+    background: rgba(52, 211, 153, 0.06);
+  }
+
+  .node.is-done .node-num {
+    color: #34d399;
+  }
+
+  .node.is-active {
+    border-color: #38bdf8;
+    color: #f1f5f9;
+    background: rgba(56, 189, 248, 0.12);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
+  }
+
+  .node.is-active .node-num {
+    color: #38bdf8;
+  }
+
+  .rail {
+    flex: 1 1 28px;
+    min-width: 18px;
+    height: 2px;
+    background: rgba(148, 163, 184, 0.18);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .rail-fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #34d399, #38bdf8);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.28s ease;
+  }
+
+  .rail.is-filled .rail-fill {
+    transform: scaleX(1);
+  }
+
+  /* Inspector body */
+  .step-panel {
+    display: none;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 2rem;
+    padding: 1.65rem 1.4rem;
+    align-items: center;
+  }
+
+  .step-panel.is-active {
+    display: grid;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .step-panel.is-active {
+      animation: panelIn 0.2s ease-out;
+    }
+  }
+
+  @keyframes panelIn {
+    from {
+      opacity: 0.35;
+      transform: translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .step-sym {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: #38bdf8;
+    margin-bottom: 0.45rem;
+  }
+
+  .step-explain h3 {
+    margin: 0 0 0.65rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #f1f5f9;
+  }
+
+  .step-explain p {
+    margin: 0 0 1rem;
+    font-size: 0.92rem;
+    color: #94a3b8;
+    line-height: 1.6;
+  }
+
+  .step-note {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    color: #cbd5e1;
+    padding-left: 0.75rem;
+    border-left: 2px solid #34d399;
+  }
+
+  /* Payload card */
+  .payload-card {
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 5px;
+    background: #0b0f17;
+    font-family: var(--font-mono);
+    font-size: 0.77rem;
+    overflow: hidden;
+  }
+
+  .payload-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 0.9rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.13);
+    background: #070a10;
+    color: #64748b;
+    font-size: 0.72rem;
+  }
+
+  .payload-badge {
+    color: #34d399;
+  }
+
+  .payload-body {
+    padding: 0.85rem 0.95rem;
+    display: grid;
+    gap: 0.48rem;
+  }
+
+  .pl-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px dashed rgba(148, 163, 184, 0.08);
+    padding-bottom: 0.35rem;
+  }
+
+  .pl-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .pl-k {
+    color: #64748b;
+  }
+
+  .pl-v {
+    color: #f1f5f9;
+    text-align: right;
+  }
+
+  .pl-v.str {
+    color: #e2e8f0;
+  }
+
+  .pl-v.num {
+    color: #cbd5e1;
+  }
+
+  .pl-v.acc {
+    color: #38bdf8;
+  }
+
+  .pl-v.sig {
+    color: #34d399;
+  }
+
+  .pl-v.art {
+    color: #eab308;
+  }
+
+  @media (max-width: 860px) {
+    .step-panel {
+      grid-template-columns: 1fr;
+      gap: 1.35rem;
+    }
+  }
+</style>
+
+<script>
+  const root = document.getElementById('tick-stepper');
+  if (root) {
+    const nodes = Array.from(root.querySelectorAll('.node'));
+    const rails = Array.from(root.querySelectorAll('.rail'));
+    const panels = Array.from(root.querySelectorAll('.step-panel'));
+    const counter = document.getElementById('stepper-counter');
+    const prevBtn = document.getElementById('step-prev');
+    const nextBtn = document.getElementById('step-next');
+    const playBtn = document.getElementById('step-play');
+
+    let current = 0;
+    let timer = null;
+
+    function setStep(idx, focusNode = false) {
+      current = (idx + nodes.length) % nodes.length;
+      root.dataset.step = String(current);
+      if (counter) counter.textContent = `Step ${current + 1} / ${nodes.length}`;
+
+      nodes.forEach((n, i) => {
+        const active = i === current;
+        n.classList.toggle('is-active', active);
+        n.classList.toggle('is-done', i < current);
+        n.setAttribute('aria-selected', active ? 'true' : 'false');
+        n.setAttribute('tabindex', active ? '0' : '-1');
+      });
+
+      rails.forEach((r, i) => {
+        r.classList.toggle('is-filled', i < current);
+      });
+
+      panels.forEach((p, i) => {
+        p.classList.toggle('is-active', i === current);
+      });
+
+      if (focusNode) nodes[current]?.focus();
+    }
+
+    function stopAuto() {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+      playBtn?.classList.remove('is-playing');
+      if (playBtn) playBtn.textContent = 'Auto-play';
+    }
+
+    function toggleAuto() {
+      if (timer !== null) {
+        stopAuto();
+        return;
+      }
+      playBtn?.classList.add('is-playing');
+      if (playBtn) playBtn.textContent = 'Pause';
+      timer = window.setInterval(() => setStep(current + 1), 2600);
+    }
+
+    prevBtn?.addEventListener('click', () => {
+      stopAuto();
+      setStep(current - 1);
+    });
+    nextBtn?.addEventListener('click', () => {
+      stopAuto();
+      setStep(current + 1);
+    });
+    playBtn?.addEventListener('click', toggleAuto);
+
+    nodes.forEach((node, idx) => {
+      node.addEventListener('click', () => {
+        stopAuto();
+        setStep(idx);
+      });
+      node.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          stopAuto();
+          setStep(idx + 1, true);
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          stopAuto();
+          setStep(idx - 1, true);
+        } else if (e.key === 'Home') {
+          e.preventDefault();
+          stopAuto();
+          setStep(0, true);
+        } else if (e.key === 'End') {
+          e.preventDefault();
+          stopAuto();
+          setStep(nodes.length - 1, true);
+        }
+      });
+    });
+  }
+</script>
