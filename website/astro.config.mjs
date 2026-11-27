@@ -84,6 +84,7 @@ export default defineConfig({
             { label: 'Core Primitives & Invariants', slug: 'core-primitives' },
             { label: 'Strategies', slug: 'strategies' },
             { label: 'State Machines & ONNX', slug: 'state-machines' },
+            { label: 'Data & Alt-Data', slug: 'data-and-alt-data' },
             { label: 'Custom Venues & Feeds', slug: 'custom-venues' },
           ],
         },

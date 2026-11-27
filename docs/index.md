@@ -22,6 +22,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 | [Core Primitives & Invariants](core-primitives.md) | Ownership, locking contracts, and sharp edges of `OhlcvDataset`, `MarketDataStreams`, `Core::Engine`, `TradeTicker`, `StateUpdater`, `PaperExchange`, and `QuoteHolds`. |
 | [Strategies](strategies.md) | Walkthroughs of `polymarket_digital`, `binance_onnx_perp`, and `cross_venue_arb`, locking rules, and out-of-tree builds (`-DKERONIS_STRATEGY_DIRS`). |
 | [State Machines & ONNX](state-machines.md) | Writing streaming C++ `StrategyStateMachine` classes, warmup guards, live reconnect catch-up, and `OnnxModel::predict()`. |
+| [Data, Alt-Data & Historical Modeling](data-and-alt-data.md) | `OhlcvDataset`, point-in-time SEC EDGAR filings & XBRL facts (CIK-keyed), stock splits, Binance funding/L-S series, and `HistoricalReader` layouts. |
 | [Custom Venues & Feeds](custom-venues.md) | Adding CCXT/proxy adapters, `MarketDataStreams` feeds, native execution clients, and multi-outcome event markets. |
 
 ### Operations & Reference

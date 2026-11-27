@@ -15,6 +15,7 @@
 - [Core Primitives & Invariants](https://engine.keronis.ai/core-primitives/)
 - [Strategies](https://engine.keronis.ai/strategies/)
 - [State Machines & ONNX](https://engine.keronis.ai/state-machines/)
+- [Data, Alt-Data & Historical Modeling](https://engine.keronis.ai/data-and-alt-data/)
 - [Custom Venues & Feeds](https://engine.keronis.ai/custom-venues/)
 - [Comparison](https://engine.keronis.ai/comparison/)
 - [FAQ](https://engine.keronis.ai/faq/)

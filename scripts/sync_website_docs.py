@@ -15,6 +15,7 @@ PAGES = {
     "strategies.md": ("strategies.md", "Strategies", "Write and register out-of-tree C++20 strategies with KERONIS_REGISTER_STRATEGY and -DKERONIS_STRATEGY_DIRS."),
     "core-primitives.md": ("core-primitives.md", "Core Primitives & Invariants", "Ownership, threading contracts, locking rules, and sharp edges of OhlcvDataset, MarketDataStreams, Core::Engine, TradeTicker, StateUpdater, PaperExchange, and QuoteHolds."),
     "state-machines.md": ("state-machines.md", "State Machines & ONNX", "Build streaming C++ StrategyStateMachine feature engines and run sub-millisecond ONNX Runtime inference."),
+    "data-and-alt-data.md": ("data-and-alt-data.md", "Data, Alt-Data & Historical Modeling", "OHLCV datasets, point-in-time SEC EDGAR filings and XBRL facts, stock splits, Binance funding/L-S series, and historical Parquet replay."),
     "custom-venues.md": ("custom-venues.md", "Custom Venues & Feeds", "Integrate new exchanges, brokers, and multi-outcome event markets via cpp_live_proxy, MarketDataStreams, or native C++ clients."),
     "live-and-paper.md": ("live-and-paper.md", "Live & Paper Trading", "Run live_infra with PostgreSQL, NATS, PaperExchange, QuoteHolds, and native venue clients."),
     "comparison.md": ("comparison.md", "Comparison", "How KeronisEngine compares to NautilusTrader and HftBacktest for predictive-model trading."),
