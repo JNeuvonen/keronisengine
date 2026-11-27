@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Sync docs/*.md into website/src/content/docs/ with Starlight frontmatter."""
+"""Sync docs/*.md into website/src/content/docs/ with Starlight frontmatter and source drift checks."""
 
 import re
 import shutil
+import sys
 from pathlib import Path
 
 # Map source docs/*.md -> (output filename under website/src/content/docs/, title, description)
@@ -13,6 +14,7 @@ PAGES = {
     "quickstart.md": ("quickstart.md", "Quickstart", "Build KeronisEngine natively on Linux with CMake/vcpkg, run unit tests, and execute the example backtest."),
     "strategies.md": ("strategies.md", "Strategies", "Write and register out-of-tree C++20 strategies with KERONIS_REGISTER_STRATEGY and -DKERONIS_STRATEGY_DIRS."),
     "state-machines.md": ("state-machines.md", "State Machines & ONNX", "Build streaming C++ StrategyStateMachine feature engines and run sub-millisecond ONNX Runtime inference."),
+    "custom-venues.md": ("custom-venues.md", "Custom Venues & Feeds", "Integrate new exchanges, brokers, and multi-outcome event markets via cpp_live_proxy, MarketDataStreams, or native C++ clients."),
     "live-and-paper.md": ("live-and-paper.md", "Live & Paper Trading", "Run live_infra with PostgreSQL, NATS, PaperExchange, QuoteHolds, and native venue clients."),
     "comparison.md": ("comparison.md", "Comparison", "How KeronisEngine compares to NautilusTrader and HftBacktest for predictive-model trading."),
     "faq.md": ("faq.md", "FAQ", "Frequently asked questions about KeronisEngine architecture, ONNX inference, venues, performance, and live operations."),
@@ -44,11 +46,45 @@ def rewrite_links(body: str) -> str:
     return re.sub(r"\(([a-z0-9_-]+)\.md(#[^)]*)?\)", repl, body)
 
 
+def verify_source_drift(root: Path, docs_dir: Path) -> None:
+    """Fail fast if docs drift from real C++ source paths or control-server routes."""
+    errors: list[str] = []
+
+    # 1. Verify every GitHub blob/tree link into this repo resolves to an existing path on disk
+    gh_re = re.compile(r"https://github\.com/JNeuvonen/keronisengine/(?:blob|tree)/main/([^)#\s]+)")
+    for md in sorted(docs_dir.glob("*.md")):
+        text = md.read_text(encoding="utf-8")
+        for rel in gh_re.findall(text):
+            if not (root / rel).exists():
+                errors.append(f"{md.name}: broken GitHub source link -> {rel}")
+
+    # 2. Verify every GET and POST route in engine_control_server/src/server.cpp is documented
+    server_cpp = root / "src/cpp/packages/engine_control_server/src/server.cpp"
+    ctrl_doc = (docs_dir / "control-server.md").read_text(encoding="utf-8")
+    if server_cpp.exists():
+        src = server_cpp.read_text(encoding="utf-8")
+        get_routes = re.findall(r'server_\.Get\("(/control/[^"]+)"', src)
+        post_routes = re.findall(r'register_mutating\("(/control/[^"]+)"', src)
+        for route in get_routes + post_routes:
+            if f"`{route}`" not in ctrl_doc:
+                errors.append(f"control-server.md: missing route from server.cpp -> {route}")
+
+    if errors:
+        print("Documentation drift detected:", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        sys.exit(1)
+
+    print("Source drift check passed (all GitHub source links and control-server routes verified).")
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent.parent
     docs_dir = root / "docs"
     out_dir = root / "website/src/content/docs"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    verify_source_drift(root, docs_dir)
 
     # Remove stale architecture.md if present so website/src/pages/architecture.astro owns /architecture/
     stale_arch = out_dir / "architecture.md"

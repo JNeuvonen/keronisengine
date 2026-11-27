@@ -1,10 +1,7 @@
 ---
 import config from 'virtual:starlight/user-config';
-import LanguageSelect from 'virtual:starlight/components/LanguageSelect';
 import Search from 'virtual:starlight/components/Search';
 import SiteTitle from 'virtual:starlight/components/SiteTitle';
-import SocialIcons from 'virtual:starlight/components/SocialIcons';
-import ThemeSelect from 'virtual:starlight/components/ThemeSelect';
 
 const shouldRenderSearch =
   config.pagefind || config.components.Search !== '@astrojs/starlight/components/Search.astro';
@@ -19,21 +16,17 @@ const isDocs = !isQuickstart && !isFaq && !pathname.startsWith('/architecture');
   <div class="title-wrapper sl-flex">
     <SiteTitle />
   </div>
-  <div class="sl-flex print:hidden">
+  <div class="sl-flex print:hidden search-wrap">
     {shouldRenderSearch && <Search />}
   </div>
   <div class="sl-hidden md:sl-flex print:hidden right-group">
-    <nav class="ke-top-nav" aria-label="Site">
+    <nav class="ke-top-nav" aria-label="Primary">
       <a href="/architecture/">Architecture</a>
       <a href="/docs/" aria-current={isDocs ? 'page' : undefined}>Docs</a>
       <a href="/quickstart/" aria-current={isQuickstart ? 'page' : undefined}>Quickstart</a>
       <a href="/faq/" aria-current={isFaq ? 'page' : undefined}>FAQ</a>
+      <a href="https://github.com/JNeuvonen/keronisengine" class="ke-gh">GitHub</a>
     </nav>
-    <div class="sl-flex social-icons">
-      <SocialIcons />
-    </div>
-    <ThemeSelect />
-    <LanguageSelect />
   </div>
 </div>
 
@@ -54,42 +47,43 @@ const isDocs = !isQuickstart && !isFaq && !pathname.startsWith('/architecture');
       min-width: 0;
     }
 
-    .right-group,
-    .social-icons {
-      gap: 1rem;
+    .right-group {
       align-items: center;
     }
 
     .ke-top-nav {
       display: flex;
       align-items: center;
-      gap: 1.25rem;
-      margin-inline-end: 0.5rem;
-      padding-inline-end: 1.25rem;
-      border-inline-end: 1px solid var(--sl-color-gray-5);
-      font-size: 0.875rem;
+      gap: 1.6rem;
+      font-size: 0.88rem;
       font-weight: 500;
     }
 
     .ke-top-nav a {
-      color: var(--sl-color-gray-2);
+      color: #8b9bb4;
       text-decoration: none;
-      transition: color 0.15s ease;
+      transition: color 0.15s ease, border-color 0.15s ease;
     }
 
-    .ke-top-nav a:hover,
+    .ke-top-nav a:hover {
+      color: #f1f5f9;
+    }
+
     .ke-top-nav a[aria-current='page'] {
-      color: var(--sl-color-white);
+      color: #38bdf8;
     }
 
-    .ke-top-nav a[aria-current='page'] {
-      color: var(--sl-color-accent-high);
+    .ke-top-nav a.ke-gh {
+      padding: 0.34rem 0.76rem;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      border-radius: 5px;
+      color: #cbd5e1;
+      font-size: 0.84rem;
     }
 
-    .social-icons::after {
-      content: '';
-      height: 1.5rem;
-      border-inline-end: 1px solid var(--sl-color-gray-5);
+    .ke-top-nav a.ke-gh:hover {
+      border-color: #38bdf8;
+      color: #f1f5f9;
     }
 
     @media (min-width: 50rem) {

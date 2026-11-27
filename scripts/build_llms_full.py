@@ -13,6 +13,7 @@ PAGES = [
     "faq.md",
     "strategies.md",
     "state-machines.md",
+    "custom-venues.md",
     "live-and-paper.md",
     "control-server.md",
     "configuration.md",

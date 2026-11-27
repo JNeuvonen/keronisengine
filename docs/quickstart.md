@@ -45,11 +45,15 @@ This builds six binaries under `build/bin/`:
 ### Run tests
 
 ```bash
+# Run both suites via Makefile
+make test
+
+# Or invoke the binaries directly:
 # Core trading engine suite (225 test cases)
 ./build/bin/trading_engine_tests
 
-# Offline live_infra unit tests (39 test cases)
-./build/bin/live_infra_tests "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
+# Offline live_infra unit tests (42 test cases)
+./build/bin/live_infra_tests "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv],[state_machines]"
 ```
 
 Why the tag filter on `live_infra_tests`? The unfiltered binary also contains live-network and exchange-testnet integration tests that require API keys and live WebSocket connections.

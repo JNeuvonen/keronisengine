@@ -21,6 +21,7 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 | [Architecture](architecture.md) | Layer separation, `live_infra` topology, standby handoff, offline Parquet pipeline, and `RingBufferBook` internals. |
 | [Strategies](strategies.md) | Walkthroughs of `polymarket_digital`, `binance_onnx_perp`, and `cross_venue_arb`, locking rules, and out-of-tree builds (`-DKERONIS_STRATEGY_DIRS`). |
 | [State Machines & ONNX](state-machines.md) | Writing streaming C++ `StrategyStateMachine` classes, warmup guards, live reconnect catch-up, and `OnnxModel::predict()`. |
+| [Custom Venues & Feeds](custom-venues.md) | Adding CCXT/proxy adapters, `MarketDataStreams` feeds, native execution clients, and multi-outcome event markets. |
 
 ### Operations & Reference
 

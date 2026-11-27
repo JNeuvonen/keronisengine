@@ -1,0 +1,12 @@
+---
+// Force Starlight to always render in dark mode so /docs/* matches / and /architecture/.
+---
+
+<script is:inline>
+  (() => {
+    document.documentElement.dataset.theme = 'dark';
+    try {
+      localStorage.setItem('starlight-theme', 'dark');
+    } catch {}
+  })();
+</script>

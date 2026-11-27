@@ -21,6 +21,8 @@ export default defineConfig({
       customCss: ['./src/styles/custom.css'],
       components: {
         Header: './src/components/StarlightHeader.astro',
+        ThemeProvider: './src/components/ThemeProvider.astro',
+        ThemeSelect: './src/components/EmptyThemeSelect.astro',
       },
       head: [
         {
@@ -42,7 +44,7 @@ export default defineConfig({
           tag: 'link',
           attrs: {
             rel: 'stylesheet',
-            href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap',
+            href: 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap',
           },
         },
         {
@@ -81,6 +83,7 @@ export default defineConfig({
             { label: 'Architecture', link: '/architecture/' },
             { label: 'Strategies', slug: 'strategies' },
             { label: 'State Machines & ONNX', slug: 'state-machines' },
+            { label: 'Custom Venues & Feeds', slug: 'custom-venues' },
           ],
         },
         {
