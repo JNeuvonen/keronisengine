@@ -9,6 +9,7 @@ PAGES = [
     "index.md",
     "quickstart.md",
     "architecture.md",
+    "core-primitives.md",
     "comparison.md",
     "faq.md",
     "strategies.md",

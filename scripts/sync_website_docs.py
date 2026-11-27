@@ -13,6 +13,7 @@ PAGES = {
     "index.md": ("docs.md", "Documentation", "Documentation hub for KeronisEngine: quickstart, strategies, streaming feature state machines, ONNX inference, and live operations."),
     "quickstart.md": ("quickstart.md", "Quickstart", "Build KeronisEngine natively on Linux with CMake/vcpkg, run unit tests, and execute the example backtest."),
     "strategies.md": ("strategies.md", "Strategies", "Write and register out-of-tree C++20 strategies with KERONIS_REGISTER_STRATEGY and -DKERONIS_STRATEGY_DIRS."),
+    "core-primitives.md": ("core-primitives.md", "Core Primitives & Invariants", "Ownership, threading contracts, locking rules, and sharp edges of OhlcvDataset, MarketDataStreams, Core::Engine, TradeTicker, StateUpdater, PaperExchange, and QuoteHolds."),
     "state-machines.md": ("state-machines.md", "State Machines & ONNX", "Build streaming C++ StrategyStateMachine feature engines and run sub-millisecond ONNX Runtime inference."),
     "custom-venues.md": ("custom-venues.md", "Custom Venues & Feeds", "Integrate new exchanges, brokers, and multi-outcome event markets via cpp_live_proxy, MarketDataStreams, or native C++ clients."),
     "live-and-paper.md": ("live-and-paper.md", "Live & Paper Trading", "Run live_infra with PostgreSQL, NATS, PaperExchange, QuoteHolds, and native venue clients."),

@@ -12,6 +12,7 @@
 - [Documentation](https://engine.keronis.ai/docs/)
 - [Quickstart](https://engine.keronis.ai/quickstart/)
 - [Architecture](https://engine.keronis.ai/architecture/)
+- [Core Primitives & Invariants](https://engine.keronis.ai/core-primitives/)
 - [Strategies](https://engine.keronis.ai/strategies/)
 - [State Machines & ONNX](https://engine.keronis.ai/state-machines/)
 - [Custom Venues & Feeds](https://engine.keronis.ai/custom-venues/)

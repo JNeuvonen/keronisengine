@@ -645,7 +645,9 @@ const modules = [
           The execution seam is <code>Core::TradeTicker</code>: <code>live_infra</code> instantiates
           <code>Live::LiveTradeTicker</code> (routing orders through <code>Live::StateUpdater</code>),
           while <code>backtest_runner</code> instantiates <code>Core::BacktestTradeTicker</code>
-          (routing orders into <code>Core::BacktestState</code>).
+          (routing orders into <code>Core::BacktestState</code>). For class-level locking rules,
+          ownership, and sharp edges across these packages, see
+          <a href="/core-primitives/" style="color: var(--accent); text-decoration: underline;">Core Primitives &amp; Invariants →</a>
         </div>
       </section>
 

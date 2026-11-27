@@ -81,6 +81,7 @@ export default defineConfig({
           label: 'Core Concepts',
           items: [
             { label: 'Architecture', link: '/architecture/' },
+            { label: 'Core Primitives & Invariants', slug: 'core-primitives' },
             { label: 'Strategies', slug: 'strategies' },
             { label: 'State Machines & ONNX', slug: 'state-machines' },
             { label: 'Custom Venues & Feeds', slug: 'custom-venues' },
