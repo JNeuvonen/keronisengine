@@ -1,14 +1,17 @@
 #pragma once
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "market_data/alt_data_module.h"
+#include "market_data/alt_data_registry.h"
 #include "market_data/alt_data_types.h"
 #include "market_data/binance_swap_series_modules.h"
 #include "market_data/binance_swap_trading_status_module.h"
+#include "market_data/custom_series_module.h"
 #include "market_data/symbol_cik_resolver.h"
 #include "market_data/us_equity_sec_facts_module.h"
 #include "market_data/us_equity_stock_splits_module.h"
@@ -62,6 +65,31 @@ class AltDataManager {
                              const std::vector<std::string>& keys);
     AltDataModule* module(AltDataSource source);
     const AltDataModule* module(AltDataSource source) const;
+
+    // Tier 1: zero-C++ generic point-in-time series under <DATA_DIR_ROOT>/alt/custom/<dataset_name>/
+    CustomSeriesModule& custom_series(const std::string& dataset_name,
+                                      const std::string& root_override = "");
+
+    // Tier 2: typed out-of-tree AltDataModule registry (KERONIS_REGISTER_ALT_DATA or programmatic)
+    void register_custom(const std::string& name,
+                         std::unique_ptr<AltDataModule> mod);
+    AltDataModule* custom_module(const std::string& name);
+
+    template <typename T>
+    T& custom(const std::string& name) {
+        auto* mod = custom_module(name);
+        if (mod == nullptr) {
+            throw std::runtime_error("AltDataManager: unknown custom module '" +
+                                     name + "'");
+        }
+        auto* typed = dynamic_cast<T*>(mod);
+        if (typed == nullptr) {
+            throw std::runtime_error(
+                "AltDataManager: custom module '" + name + "' has unexpected type");
+        }
+        return *typed;
+    }
+
     void clear();
 
    private:
@@ -71,6 +99,9 @@ class AltDataManager {
 
     std::unordered_map<AltDataSource, std::unique_ptr<AltDataModule>>
         module_by_source_;
+    mutable std::mutex custom_mutex_;
+    std::unordered_map<std::string, std::unique_ptr<AltDataModule>>
+        custom_modules_;
     SymbolCikResolver symbol_cik_resolver_;
 };
 

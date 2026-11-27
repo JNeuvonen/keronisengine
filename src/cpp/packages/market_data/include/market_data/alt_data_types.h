@@ -21,6 +21,7 @@ enum class AltDataSource {
     BinanceSwapFunding,
     BinanceSwapAccountLongShortRatio,
     BinanceSwapTradingStatus,
+    Custom,
 };
 
 const char* to_string(AltDataSource source);

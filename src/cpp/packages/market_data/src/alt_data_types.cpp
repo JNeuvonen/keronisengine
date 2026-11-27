@@ -19,6 +19,8 @@ const char* to_string(AltDataSource source) {
             return "binance_swap_account_long_short_ratio";
         case AltDataSource::BinanceSwapTradingStatus:
             return "binance_swap_trading_status";
+        case AltDataSource::Custom:
+            return "custom";
     }
     return "unknown";
 }
@@ -27,7 +29,8 @@ std::optional<AltDataSource> alt_data_source_from_string(const std::string& name
     for (const auto source :
          {AltDataSource::UsEquityStockSplits, AltDataSource::UsEquitySecFacts,
           AltDataSource::UsEquityShortInterest, AltDataSource::BinanceSwapFunding,
-          AltDataSource::BinanceSwapAccountLongShortRatio, AltDataSource::BinanceSwapTradingStatus}) {
+          AltDataSource::BinanceSwapAccountLongShortRatio, AltDataSource::BinanceSwapTradingStatus,
+          AltDataSource::Custom}) {
         if (name == to_string(source)) return source;
     }
     return std::nullopt;

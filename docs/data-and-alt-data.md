@@ -59,7 +59,60 @@ Headers: [`binance_swap_series_modules.h`](https://github.com/JNeuvonen/keronise
 
 ---
 
-## 3. Historical Data Reader & On-Disk Layout (`HistoricalReader`)
+## 3. Custom Datasets & Alt-Data Primitives
+
+KeronisEngine provides two first-class ways to feed custom datasets into strategies without forking the engine:
+
+### Tier 1 — Zero-C++ Point-in-Time Series (`CustomSeriesModule`)
+
+Header: [`custom_series_module.h`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/market_data/include/market_data/custom_series_module.h)
+
+Write JSONL (`.jsonl`) or JSON array (`.json`) files from any Python/cron pipeline into `<DATA_DIR_ROOT>/alt/custom/<dataset_name>/<key>.jsonl` (or a directory `<key>/` of files). Every row requires an integer `available_ts_ms` (UTC ms when the datum became observable) plus one or more numeric fields:
+
+```json
+{"available_ts_ms": 1732632000000, "value": 0.85, "confidence": 0.92}
+```
+
+Query directly from any strategy via `AltDataManager::instance().custom_series(...)`:
+
+```cpp
+auto& flows = MarketData::AltDataManager::instance().custom_series("onchain_flows");
+flows.preload({"BTCUSDT", "ETHUSDT"});
+
+// Binary-searches available_ts_ms <= as_of_ms; returns nullopt if unprovisioned or stale.
+auto score = flows.latest_value("BTCUSDT", engine.get_time(), "value", /*max_age_ms=*/600'000);
+auto recent = flows.window("BTCUSDT", engine.get_time() - 3'600'000, engine.get_time());
+```
+
+`CustomSeriesModule` enforces `available_ts_ms <= as_of_ms` by construction, sorts rows on parse, fails loudly on missing `available_ts_ms`, tracks `keys_without_data()`, and participates automatically in `AltDataManager::refresh_all_changed()`.
+
+### Tier 2 — Out-of-Tree Typed Modules (`KERONIS_REGISTER_ALT_DATA`)
+
+Header: [`alt_data_registry.h`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/market_data/include/market_data/alt_data_registry.h)
+
+For structured domain data (custom events, injury reports, option surfaces), subclass `FileBackedAltDataModule<MyPayload>`, register it with `KERONIS_REGISTER_ALT_DATA`, and compile it out-of-tree via `-DKERONIS_STRATEGY_DIRS`:
+
+```cpp
+class MyEventsModule final
+    : public MarketData::FileBackedAltDataModule<std::vector<MyEvent>> {
+   public:
+    MarketData::AltDataSource source() const override { return MarketData::AltDataSource::Custom; }
+    std::optional<MyEvent> latest_event(const std::string& key, long long as_of_ms) const;
+   protected:
+    std::string path_for(const std::string& key) const override;
+    std::vector<MyEvent> parse(const std::string& path) const override;
+};
+
+KERONIS_REGISTER_ALT_DATA("my_events", MyEventsModule);
+
+// Access from any strategy:
+auto& mod = MarketData::AltDataManager::instance().custom<MyEventsModule>("my_events");
+mod.preload(symbols);
+```
+
+---
+
+## 4. Historical Data Reader & On-Disk Layout (`HistoricalReader`)
 
 Header: [`historical_reader.h`](https://github.com/JNeuvonen/keronisengine/blob/main/src/cpp/packages/market_data/include/market_data/historical_reader.h)
 

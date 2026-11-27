@@ -142,6 +142,18 @@ std::size_t AltDataManager::refresh_all_changed() {
         (void)source;
         total += mod->refresh_changed();
     }
+    std::vector<AltDataModule*> custom_ptrs;
+    {
+        std::lock_guard<std::mutex> lock(custom_mutex_);
+        custom_ptrs.reserve(custom_modules_.size());
+        for (auto& [name, mod] : custom_modules_) {
+            (void)name;
+            custom_ptrs.push_back(mod.get());
+        }
+    }
+    for (auto* mod : custom_ptrs) {
+        total += mod->refresh_changed();
+    }
     return total;
 }
 
@@ -151,10 +163,54 @@ std::size_t AltDataManager::refresh_keys(AltDataSource source,
     return mod == nullptr ? 0 : mod->refresh_keys(keys);
 }
 
+CustomSeriesModule& AltDataManager::custom_series(
+    const std::string& dataset_name, const std::string& root_override) {
+    const std::string key = "series:" + dataset_name;
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    auto it = custom_modules_.find(key);
+    if (it == custom_modules_.end()) {
+        auto mod =
+            std::make_unique<CustomSeriesModule>(dataset_name, root_override);
+        auto* raw = mod.get();
+        custom_modules_[key] = std::move(mod);
+        return *raw;
+    }
+    return static_cast<CustomSeriesModule&>(*it->second);
+}
+
+void AltDataManager::register_custom(const std::string& name,
+                                     std::unique_ptr<AltDataModule> mod) {
+    if (name.empty() || mod == nullptr) {
+        throw std::invalid_argument(
+            "AltDataManager::register_custom: invalid name or null module");
+    }
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    custom_modules_[name] = std::move(mod);
+}
+
+AltDataModule* AltDataManager::custom_module(const std::string& name) {
+    std::lock_guard<std::mutex> lock(custom_mutex_);
+    auto it = custom_modules_.find(name);
+    if (it != custom_modules_.end()) return it->second.get();
+    if (!AltDataRegistry::contains(name)) return nullptr;
+    auto mod = AltDataRegistry::create(name);
+    auto* raw = mod.get();
+    custom_modules_[name] = std::move(mod);
+    return raw;
+}
+
 void AltDataManager::clear() {
     for (auto& [source, mod] : module_by_source_) {
         (void)source;
         mod->clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(custom_mutex_);
+        for (auto& [name, mod] : custom_modules_) {
+            (void)name;
+            mod->clear();
+        }
+        custom_modules_.clear();
     }
     symbol_cik_resolver_.clear();
 }

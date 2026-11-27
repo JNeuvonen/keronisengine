@@ -9,7 +9,7 @@ Thanks for your interest in contributing to KeronisEngine!
    ```bash
    cmake --build build -j"$(nproc)"
    ./build/bin/trading_engine_tests
-   ./build/bin/live_infra_tests "[state_machines],[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
+   ./build/bin/live_infra_tests "[state_machines],[custom_alt_data],[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv]"
    ./examples/quickstart_backtest/run.sh ./build/bin/backtest_runner
    ```
 3. Run the public-tree hygiene check before opening a PR:

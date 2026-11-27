@@ -1,7 +1,7 @@
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
 JOBS ?= $(shell nproc 2>/dev/null || echo 4)
-OFFLINE_LIVE_TAGS := "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv],[state_machines]"
+OFFLINE_LIVE_TAGS := "[paper_exchange],[paper_trading],[quote_holds],[normalized_trade],[lighter_market_data],[ohlcv],[state_machines],[custom_alt_data]"
 
 .PHONY: help configure build test backtest clean
 
