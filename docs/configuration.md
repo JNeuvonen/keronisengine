@@ -9,12 +9,17 @@
 | `DATA_DIR_ROOT` | Root directory for Parquet market data, caches, and state-machine persistence |
 | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | PostgreSQL connection parameters |
 | `ACCOUNTS_FILE` | Path to JSON file mapping `account_id` to venue credentials |
-| `NATS_TOKEN` | NATS authentication token (`live_infra` exits if unset) |
+| `NATS_TOKEN` | NATS authentication token (required unless `ENABLE_NATS_PUBLISHER=0`) |
+| `MARKET_DATA_COVERAGE_PATH` | Path to public market-data stream coverage JSON (required unless `DISABLE_PUBLIC_MARKET_DATA_STREAMS=1`) |
 
 ### Optional
 
 | Variable | Default | Description |
 |---|---|---|
+| `ENABLE_NATS_PUBLISHER` | `1` | Set to `0` to run `live_infra` without a NATS server |
+| `DISABLE_PUBLIC_MARKET_DATA_STREAMS` | `0` | Set to `1` to skip starting `MarketDataStreamManager` when no coverage JSON is configured |
+| `MD_STATE_MACHINES` | unset | Comma-separated list of registered `StrategyStateMachine` names to instantiate in `live_infra` |
+| `POLYGON_API_KEY` | unset | Polygon.io / Massive.com API key for US equities market data and catalog refresh |
 | `NATS_URL` | `nats://localhost:4222` | NATS server URL |
 | `IS_PROD` | unset / `0` | When `1`, non-paper strategies require a fresh `quote_guard` heartbeat in `engine_health` (`engine_instance = 'quote_guard'`) |
 | `IS_ORDER_CREATION_DISABLED` | `0` | Set to `1` to block live order submissions |
@@ -29,8 +34,8 @@
 | `ENGINE_CONTROL_SERVER_PORT` | `8090` | Control server listen port |
 | `ENABLE_ENGINE_CONTROL_MUTATIONS` | `0` | Enable `POST` mutation endpoints |
 | `LOG_DIRECTORY` | unset | Rotating disk log directory (when built with `-DKERONIS_DISK_LOGGING=ON`) |
-| `CCXT_PROXY_BASE_URL` | unset | External proxy base URL for non-native venues and proxy credential lookups |
-| `CCXT_PROXY_USER_DATA_WS_URL` | `ws://localhost:8040/api/v1/user-data/stream` | External proxy user-data WebSocket |
+| `CCXT_PROXY_BASE_URL` | `http://localhost:8000/api/v1/ccxt` | Base URL for `cpp_live_proxy` HTTP endpoints (must include `/api/v1/ccxt`) |
+| `CCXT_PROXY_USER_DATA_WS_URL` | `ws://localhost:8040/api/v1/user-data/stream` | Proxy user-data WebSocket (`deploy/.env.example` sets port `8000` for local single-process `uvicorn`) |
 
 ## `export_strategy_config`
 

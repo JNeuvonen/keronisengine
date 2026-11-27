@@ -28,7 +28,7 @@ This flagship example shows the standard predictive-model loop on crypto perpetu
 2. **In-process ONNX scoring:** Loads the `.onnx` artifact from `strategy.strategy_config.strategy_models`, calls `model->predict(*features)` in `compute_predictions_callback`, and publishes the latest score lock-free via `ticker->atomic_signal_main.store(score, now_ms)`.
 3. **Risk-checked execution:** `on_market_event` reads `atomic_signal_main.load()`, enters long via `Core::StrategyHelpers::submit_market_order` when `score > kEnterThreshold`, and exits via `Core::StrategyHelpers::close_trade_market` when `score < kExitThreshold`.
 
-Runs standalone in `backtest_runner` and `PaperExchange`; live Binance execution routes through the configured `CCXT_PROXY_BASE_URL`.
+Runs in `live_infra` (`PaperExchange` or live Binance via `CCXT_PROXY_BASE_URL`) when `windowed_taker_flow` is enabled in `MD_STATE_MACHINES`. In `backtest_runner`, strategies read `OhlcvDataset` bars, order books, or precomputed `market_data.predictions` via `ApplyPrecomputedPredictionsCallback`.
 
 ```cpp
 void compute_predictions(Core::Engine& engine, Core::Strategy& strategy) {

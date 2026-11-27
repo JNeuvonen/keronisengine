@@ -41,8 +41,8 @@ If you do use predictive models, any framework that exports `.onnx` (LightGBM, X
 You implement streaming features once as a `StrategyStateMachine` subclass in C++.
 
 1. `historical_feature_gen` replays partitioned Parquet through that exact class to write training panels.
-2. `backtest_runner` replays Parquet through the same compiled class.
-3. `live_infra` feeds live WebSocket ticks into the same compiled class via `StateMachineDispatcher`.
+2. `backtest_runner` replays Parquet bars, order books, and precomputed `market_data.predictions` scored from those panels.
+3. `live_infra` feeds live WebSocket ticks into the same compiled class via `StateMachineDispatcher` (`MD_STATE_MACHINES`).
 
 There is no separate Python research re-implementation to drift from production.
 

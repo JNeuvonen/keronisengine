@@ -4,8 +4,14 @@
 
 ### Prerequisites
 
-- CMake >= 3.24, Ninja, C++20 compiler (GCC 13+ or Clang 17+)
-- [vcpkg](https://github.com/microsoft/vcpkg)
+- Linux (Ubuntu 24.04 tested in CI), CMake >= 3.24, C++20 compiler (GCC 13+ or Clang 17+)
+- Build tools: `sudo apt-get install -y ninja-build autoconf autoconf-archive automake libtool pkg-config bison flex python3-venv`
+- [vcpkg](https://github.com/microsoft/vcpkg) bootstrapped locally:
+  ```bash
+  git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+  "$HOME/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+  export VCPKG_ROOT="$HOME/vcpkg"
+  ```
 - Rust toolchain (`cargo`) for the Hyperliquid order signer crate (`src/rust/hyperliquid_signer`)
 - Python 3 with `pyarrow` in a virtualenv (only used by `examples/quickstart_backtest/generate_sample_data.py`)
 

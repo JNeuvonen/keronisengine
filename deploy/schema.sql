@@ -231,7 +231,7 @@ CREATE TABLE IF NOT EXISTS org_identity (
 	email TEXT NOT NULL, 
 	CONSTRAINT org_identity_pkey PRIMARY KEY (id)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS unique_org_identity_email ON org_identity ();
+CREATE UNIQUE INDEX IF NOT EXISTS unique_org_identity_email ON org_identity (email);
 
 CREATE TABLE IF NOT EXISTS portfolio_tick_light (
 	id BIGSERIAL NOT NULL, 

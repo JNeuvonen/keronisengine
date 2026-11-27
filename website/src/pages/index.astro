@@ -42,8 +42,20 @@ std::vector<Core::StrategyDecision> on_market_event(
             const auto bba = ticker->read_outcome_bba(outcome);
             if (!bba || bba->best_ask <= 0.0 || (fair[outcome] - bba->best_ask) < kMinEdge) continue;
 
-            auto [res, order] = ticker->construct_order(engine, strategy, make_limit_buy(
-                symbol, round_to_tick(bba->best_ask, tick), kOrderShares, now_ms, *ticker, strategy));
+            const double limit_px = round_to_tick(bba->best_ask, tick);
+            Core::CreateOrderParams params{
+                .symbol = symbol, .type = Core::OrderType::LIMIT, .side = Core::OrderSide::BUY,
+                .price = mpfr::mpreal(limit_px), .prediction = std::nullopt,
+                .quantity = mpfr::mpreal(kOrderShares), .exchange_name = "polymarket",
+                .market_type = "spot", .strategy_id = strategy.strategy_config.id,
+                .expires_on_ms = now_ms + kOrderExpiryMs, .sizing_coeff_delta = mpfr::mpreal("1.0"),
+                .trade_id = std::nullopt, .reduce_only = false, .timestamp = now_ms,
+                .quote_asset = ticker->quote_asset, .base_asset = ticker->base_asset,
+                .allowed_to_bypass_risk_engine = false, .must_pass_min_notional_filter = false,
+                .is_trade_close_order = false, .prevent_overlapping_orders = true,
+                .apply_cooldown_after_failed_order = false, .max_unacked_enter_orders = std::nullopt,
+            };
+            auto [res, order] = ticker->construct_order(engine, strategy, params);
             if (res == Core::OrderConstructionResult::VALID && order.has_value()) {
                 auto o = order.value();
                 o.is_prediction_market_order = true;
@@ -193,6 +205,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -202,7 +215,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
     <style>
       :root {
         color-scheme: dark;
-        --bg: #06080d;
+        --bg: #06090f;
         --bg-panel: #0b0f17;
         --bg-inset: #080b12;
         --rule: rgba(148, 163, 184, 0.13);
@@ -892,13 +905,14 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         .asset-panel {
           grid-template-columns: 1fr;
         }
-        .doc-link:not(:nth-child(3n)) {
-          padding-right: 0;
-        }
       }
 
       @media (max-width: 720px) {
-        .nav-links a:not(.nav-gh):not(.nav-docs) {
+        .nav-links {
+          gap: 0.9rem;
+          font-size: 0.82rem;
+        }
+        .nav-links .nav-gh {
           display: none;
         }
       }
@@ -965,7 +979,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         </div>
         <div class="ev-item">
           <div class="ev-num"><span>Predictive</span> models</div>
-          <div class="ev-lbl">Native C++ inference via ONNX Runtime.</div>
+          <div class="ev-lbl">Native C++ inference via ONNX Runtime</div>
         </div>
       </div>
 
@@ -1128,7 +1142,7 @@ KERONIS_REGISTER_STATE_MACHINE("spread", SpreadSM);`;
         <div class="pillars">
           <div class="pillar">
             <h3>Unified feature engine</h3>
-            <p>Feature state machines compile once and run identically across Parquet generation, backtests, paper, and live execution.</p>
+            <p>Feature state machines compile once and run identically across offline Parquet generation, paper trading, and live execution.</p>
           </div>
           <div class="pillar">
             <h3>Native model inference</h3>

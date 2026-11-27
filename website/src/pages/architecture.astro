@@ -8,7 +8,7 @@ const modules = [
   {
     name: 'market_data',
     href: `${GH}/src/cpp/packages/market_data`,
-    owns: 'MarketDataStreamManager, MarketDataStreams, OhlcvDataset / DatasetsManager, BarAggregator, LighterOrderBook, DepthHistory, StrategyStateMachine, StateMachineDispatcher, SMSyncer',
+    owns: 'MarketDataStreamManager, MarketDataStreams, OhlcvDataset / DatasetsManager, BarAggregator, LighterOrderBook, DepthHistory, StrategyStateMachine, StateMachineDispatcher, StateMachineSyncer',
     excludes: 'Orders, positions, accounts, venue execution',
   },
   {
@@ -697,7 +697,7 @@ const modules = [
 
             <rect x="26" y="156" width="218" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
             <text x="38" y="180" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">StateMachineDispatcher</text>
-            <text x="38" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Lock-free queue · SMSyncer</text>
+            <text x="38" y="200" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">Lock-free queue · StateMachineSyncer</text>
 
             <!-- Center boxes -->
             <rect x="302" y="50" width="202" height="60" rx="4" fill="#0b0f17" stroke="#2a3548" />
@@ -827,8 +827,8 @@ const modules = [
             <text x="24" y="160" fill="#94a3b8" font-family="IBM Plex Mono, monospace" font-size="9.5">config.json + BacktestState</text>
 
             <rect x="242" y="118" width="194" height="56" rx="4" fill="#0d1826" stroke="#38bdf8" stroke-opacity="0.6" />
-            <text x="254" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Same State Machines</text>
-            <text x="254" y="160" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="9.5">RingBufferBook + OHLCV</text>
+            <text x="254" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">OhlcvDataset &amp; Books</text>
+            <text x="254" y="160" fill="#38bdf8" font-family="IBM Plex Mono, monospace" font-size="9.5">RingBufferBook + Predictions</text>
 
             <rect x="482" y="118" width="194" height="56" rx="4" fill="#0b0f17" stroke="#34d399" stroke-opacity="0.55" />
             <text x="494" y="142" fill="#f1f5f9" font-family="Inter, sans-serif" font-size="12.5" font-weight="600">Core::Engine + ONNX</text>
@@ -867,7 +867,7 @@ const modules = [
               <li>Flat tick-indexed array hashed by <code>tick_idx &amp; mask</code> instead of tree nodes.</li>
               <li>16-byte POD slots (<code>tick_tag</code>, <code>updated_sec</code>, <code>qty</code>); tag mismatch rejects stale wrapped slots.</li>
               <li>64-bit occupancy bitmap skips empty ranges with <code>__builtin_ctzll</code>.</li>
-              <li>Allocated with <code>make_unique_for_overwrite</code> so untouched pages use zero physical RAM (19-bit exchange / 10-bit Polymarket window).</li>
+              <li>Allocated with <code>make_unique_for_overwrite</code> so untouched pages use zero physical RAM (19-bit exchange / 10-bit Polymarket window, 16 KB per side).</li>
               <li><code>apply_bid</code> benchmarks at ~1.5 ns/op on Intel Core Ultra 9 285K.</li>
             </ul>
           </div>
@@ -930,6 +930,8 @@ const modules = [
           <a href="/docs/">docs</a>
           <a href="/quickstart/">quickstart</a>
           <a href="/faq/">faq</a>
+          <a href="/strategies/">strategies</a>
+          <a href="/live-and-paper/">live-and-paper</a>
           <a href="/llms.txt">llms.txt</a>
           <a href="/llms-full.txt">llms-full.txt</a>
           <a href="https://github.com/JNeuvonen/keronisengine">github</a>

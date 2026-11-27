@@ -1,6 +1,6 @@
 # State Machines & ONNX
 
-Streaming features are implemented as C++ subclasses of `MarketData::StrategyStateMachine`. The same compiled class runs in `historical_feature_gen` (offline Parquet training sets), `backtest_runner`, and `live_infra`, eliminating feature-code drift between training and serving.
+Streaming features are implemented as C++ subclasses of `MarketData::StrategyStateMachine`. The same compiled class runs in `historical_feature_gen` (offline Parquet training panels) and `live_infra` (paper and live execution via `StateMachineDispatcher` and `MD_STATE_MACHINES`), eliminating feature-code drift between offline training and live serving. (`backtest_runner` consumes `OhlcvDataset` bars, order books, and precomputed `market_data.predictions` generated from those panels.)
 
 ## Bundled teaching state machines
 

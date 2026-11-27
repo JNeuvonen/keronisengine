@@ -13,7 +13,7 @@ Documentation: **[engine.keronis.ai](https://engine.keronis.ai/)** · Machine-re
 ## Core capabilities
 
 - **Sub-ms inference & order book:** Flat tick-indexed `RingBufferBook` (~1.5 ns/op `apply_bid` on Core Ultra 9 285K under strict IEEE-754 flags), lock-free event queues, streaming C++ `StrategyStateMachine`s, and in-process `OnnxModel::predict()`.
-- **Unified feature & strategy code:** The same C++ state machines and strategy callbacks run in `historical_feature_gen`, `backtest_runner`, `PaperExchange`, and `live_infra`.
+- **Unified feature & strategy code:** The same C++ `StrategyStateMachine`s run in `historical_feature_gen` and `live_infra` (`PaperExchange` + live), while `backtest_runner` replays Parquet bars, order books, and precomputed predictions through the same strategy callbacks.
 - **Crypto & prediction markets:** Native execution for Polymarket (CLOB WebSockets, EIP-712 bulk signing, multi-outcome tickers, queue-notional backtesting), Hyperliquid (bundled Rust signer), and Aster; native L2 market data for Lighter; extensible to new exchanges or sports-betting venues.
 - **Out-of-tree plugins:** Register strategies (`KERONIS_REGISTER_STRATEGY`) and state machines (`KERONIS_REGISTER_STATE_MACHINE`) from external directories (`-DKERONIS_STRATEGY_DIRS=...`) without forking this repository.
 - **Production safety:** Durable `QuoteHolds` surviving restarts, `quote_guard` heartbeat enforcement, cron standby handoff, disk crash recovery, high-precision MPFR accounting, and a localhost HTTP control server.

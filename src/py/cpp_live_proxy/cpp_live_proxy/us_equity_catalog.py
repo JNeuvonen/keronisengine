@@ -76,60 +76,38 @@ def _write_cache(payload: Dict[str, Any]) -> None:
 
 
 def _fetch_from_polygon() -> List[Dict[str, Any]]:
-    # Lazy import — avoids requiring Polygon credentials at module import
-    # time (e.g. for unit tests that mock the catalog).
-    from keronis_utils.polygon import PolygonAPI
-
+    local_key = os.environ.get("POLYGON_API_KEY")
+    if not local_key:
+        raise RuntimeError(
+            "POLYGON_API_KEY env var is required to refresh the US equity catalog"
+        )
     # Both listing states: delisted names are where every company that went
     # to zero lives, and a short book that never sees them measures a
     # survivor sample.
     states = [True, False]
+    from polygon import RESTClient as _RESTClient
+    client = _RESTClient(local_key)
 
-    # PolygonAPI.get_instance() reads from Secrets() which expects a
-    # GCP-secret-name indirection (env var `polygon_api` whose value is
-    # the secret name to fetch). For local development, also accept a
-    # literal POLYGON_API_KEY env var directly — matches the convention
-    # in scripts/build/project/start_live_infra_local.sh and avoids
-    # forcing a GCP Secret Manager round-trip during dev iteration.
-    try:
-        api = PolygonAPI.get_instance()
-        return _dedupe([r for a in states for r in api.fetch_us_equity_tickers(active=a)])
-    except ValueError as e:
-        if "API key" not in str(e):
-            raise
-        local_key = os.environ.get("POLYGON_API_KEY")
-        if not local_key:
-            raise RuntimeError(
-                "Polygon API key unavailable: neither GCP secret "
-                "(env `polygon_api` -> GCP secret name) nor "
-                "POLYGON_API_KEY env var is set"
-            ) from e
-        # Construct a one-off PolygonAPI bypassing the Secrets() lookup.
-        # We don't pollute the singleton because callers elsewhere may
-        # depend on the GCP-credentialed instance.
-        from polygon import RESTClient as _RESTClient
-        client = _RESTClient(local_key)
-
-        out = []
-        for active in states:
-            for ticker in client.list_tickers(
-                market="stocks", active=active, order="asc", limit=1000,
-            ):
-                t_type = getattr(ticker, "type", None)
-                if t_type not in ("CS", "ETF"):
-                    continue
-                out.append({
-                    "ticker": ticker.ticker,
-                    "name": getattr(ticker, "name", "") or "",
-                    "type": t_type,
-                    "primary_exchange": getattr(ticker, "primary_exchange", "")
-                    or "",
-                    "currency": getattr(ticker, "currency_name", "usd") or "usd",
-                    "active": bool(getattr(ticker, "active", active)),
-                    "list_date": getattr(ticker, "list_date", "") or "",
-                    "delisted_utc": getattr(ticker, "delisted_utc", "") or "",
-                })
-        return _dedupe(out)
+    out = []
+    for active in states:
+        for ticker in client.list_tickers(
+            market="stocks", active=active, order="asc", limit=1000,
+        ):
+            t_type = getattr(ticker, "type", None)
+            if t_type not in ("CS", "ETF"):
+                continue
+            out.append({
+                "ticker": ticker.ticker,
+                "name": getattr(ticker, "name", "") or "",
+                "type": t_type,
+                "primary_exchange": getattr(ticker, "primary_exchange", "")
+                or "",
+                "currency": getattr(ticker, "currency_name", "usd") or "usd",
+                "active": bool(getattr(ticker, "active", active)),
+                "list_date": getattr(ticker, "list_date", "") or "",
+                "delisted_utc": getattr(ticker, "delisted_utc", "") or "",
+            })
+    return _dedupe(out)
 
 
 def _dedupe(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

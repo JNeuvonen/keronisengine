@@ -18,7 +18,7 @@ The rest of this page is the deep dive for engineers who want to understand the 
 
 | Module | What it owns | What it does not touch |
 |---|---|---|
-| `market_data` | `MarketDataStreamManager`, `MarketDataStreams`, `OhlcvDataset` / `DatasetsManager`, `LighterOrderBook`, `DepthHistory`, `StrategyStateMachine`, `StateMachineDispatcher`, `SMSyncer` | Orders, positions, accounts, venue execution |
+| `market_data` | `MarketDataStreamManager`, `MarketDataStreams`, `OhlcvDataset` / `DatasetsManager`, `BarAggregator`, `LighterOrderBook`, `DepthHistory`, `StrategyStateMachine`, `StateMachineDispatcher`, `StateMachineSyncer` | Orders, positions, accounts, venue execution |
 | `trading_engine` | `Core::Engine`, `Core::Strategy`, `Core::TradeTicker` (base), `RingBufferBook`, risk/rate limits, `BacktestState`, `BacktestTradeTicker` | Live sockets, venue signing, PostgreSQL, NATS |
 | `live_infra` | `Live::StateUpdater`, `Live::LiveTradeTicker`, `Live::AccountStreamManager`, `Live::PaperExchange`, `QuoteHolds`, native venue clients, standby handoff | Backtest replay |
 | `backtest_runner` | CLI entry point that parses `config.json`, drives `Core::BacktestState`, and dumps `summary.json`, `trades.json`, `equity_curve.json` | PostgreSQL, NATS, live venues |
@@ -39,7 +39,7 @@ flowchart TB
         MSM["MarketDataStreamManager<br/>(coverage config + WS streams)"]
         DS["DatasetsManager / OhlcvDataset<br/>(in-memory + Parquet)"]
         SMD["StateMachineDispatcher<br/>(BlockingConcurrentQueue + thread)"]
-        SM["Registered StrategyStateMachines<br/>+ SMSyncer (REST catch-up)"]
+        SM["Registered StrategyStateMachines<br/>+ StateMachineSyncer (REST catch-up)"]
         MSM --> DS
         MSM --> SMD --> SM
     end

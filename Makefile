@@ -35,7 +35,8 @@ test: build
 	./$(BUILD_DIR)/bin/live_infra_tests $(OFFLINE_LIVE_TAGS)
 
 backtest: build
-	./examples/quickstart_backtest/run.sh ./$(BUILD_DIR)/bin/backtest_runner
+	@PY="$${PYTHON:-$$( [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3 )}"; \
+	PYTHON="$$PY" ./examples/quickstart_backtest/run.sh ./$(BUILD_DIR)/bin/backtest_runner
 
 clean:
 	rm -rf "$(BUILD_DIR)"

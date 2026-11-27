@@ -35,8 +35,8 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 ## End-to-end workflow
 
 1. **Offline feature generation (`historical_feature_gen`):** Replay partitioned Parquet data through a compiled `StrategyStateMachine` to emit training panels. Train in Python (LightGBM, XGBoost, PyTorch) and export to `.onnx`.
-2. **Historical backtest (`backtest_runner`):** Replay Parquet bars, trades, and order books through your strategy and `.onnx` model with configurable latency, fees, leverage, and Polymarket queue-notional fills. Emits `summary.json`, `trades.json`, and `equity_curve.json`.
-3. **Paper and live execution (`live_infra`):** Validate against live feeds with `PaperExchange` (taker at `ack + latency`, maker against resting quotes and subsequent prints, immediate cancel stop), then connect live accounts with durable quote holds and HTTP introspection.
+2. **Historical backtest (`backtest_runner`):** Replay Parquet bars, trades, order books, and precomputed `market_data.predictions` through your strategy with configurable latency, fees, leverage, and Polymarket queue-notional fills. Emits `summary.json`, `trades.json`, and `equity_curve.json`.
+3. **Paper and live execution (`live_infra`):** Run the same compiled `StrategyStateMachine` and `.onnx` model against live feeds with `PaperExchange` (taker at `ack + latency`, maker against resting quotes and subsequent prints, immediate cancel stop), then connect live accounts with durable quote holds and HTTP introspection.
 
 ## Supported venues & adapters
 
@@ -46,8 +46,9 @@ For a visual breakdown of module boundaries, threading, and memory layout, see [
 | **Hyperliquid** | Native WS | Native (Rust signer) | Mainnet and testnet (`HYPERLIQUID_USE_TESTNET=1`) |
 | **Aster** | Native WS | Native | Mainnet and testnet (`ASTER_USE_TESTNET=1`) |
 | **Lighter** | Native REST + L2 WS | `PaperExchange` | Nonce-checked `LighterOrderBook` and `DepthHistory` |
-| **Binance / Bybit / OKX / Gate.io / Bitget / Coinbase** | Native / Parquet | Bundled `cpp_live_proxy` | CCXT execution and user-data WebSockets (`src/py/cpp_live_proxy`) |
-| **US Equities (Massive.com + IBKR)** | Massive.com (Polygon.io) / Parquet | Bundled `cpp_live_proxy` | Interactive Brokers Gateway and active-plus-delisted US equity catalog |
+| **Binance / Bybit / OKX / Gate.io / Bitget** | Native WS / Parquet | Bundled `cpp_live_proxy` | CCXT execution and user-data WebSockets (`src/py/cpp_live_proxy`) |
+| **Coinbase** | Parquet / external | Bundled `cpp_live_proxy` | CCXT execution via `cpp_live_proxy` |
+| **US Equities (Polygon.io / Massive.com + IBKR)** | Polygon.io / Parquet | Bundled `cpp_live_proxy` | Interactive Brokers Gateway and active-plus-delisted US equity catalog (`POLYGON_API_KEY`) |
 | **Sports & custom event markets** | Modular streams | Modular ticker & proxy | Multi-outcome order books and stream interfaces |
 
 ## Included in the repository
